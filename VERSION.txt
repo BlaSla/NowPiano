@@ -1,0 +1,2 @@
+﻿NowPiano 1.0
+Build: 2026-10-09

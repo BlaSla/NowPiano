@@ -1,0 +1,9 @@
+﻿NowPiano
+========================================
+
+Разработчик: Вячеслав Блажков
+Email: blazhkov1971@gmail.com
+GitHub: https://github.com/BlaSla
+
+Год: 2026
+Версия: 1.0

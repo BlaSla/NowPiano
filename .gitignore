@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+*.log
+.idea/
+.vscode/
+out_omr/
+*.mxl
+*.omr
