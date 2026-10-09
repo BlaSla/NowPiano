@@ -7,7 +7,7 @@
 ## Возможности
 
 - Распознавание нот из PDF — через Audiveris (OMR)
-- Воспроизведение MIDI — с падающими нотами (piano roll)
+- Воспроизведение MIDI
 - Реалистичный звук пианино — FluidSynth + SoundFont Arachno
 - Красивый Qt-интерфейс — светлая тема, крупные иконки
 - Управление — Play, Pause, Stop, Rewind, Loop
