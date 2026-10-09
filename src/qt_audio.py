@@ -14,11 +14,30 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+# --- Добавляем DLL-директорию FluidSynth (рядом с exe: tools/fluidsynth) ---
+if getattr(_sys, "frozen", False):
+    _exe_dir = os.path.dirname(_sys.executable)
+    for _cand in [
+        os.path.join(_exe_dir, "tools", "fluidsynth"),
+        os.path.join(_exe_dir, "tools", "fluidsynth", "bin"),
+        os.path.join(_exe_dir, "fluidsynth"),
+    ]:
+        if os.path.exists(_cand):
+            try:
+                os.add_dll_directory(_cand)
+            except Exception:
+                pass
+            os.environ["PATH"] = _cand + os.pathsep + os.environ.get("PATH", "")
+            print("[audio] FluidSynth DLL dir:", _cand, flush=True)
+            break
+
 try:
     import fluidsynth
     FLUID_IMPORT_OK = True
-except ImportError:
+    print("[audio] pyfluidsynth OK", flush=True)
+except Exception as _e:
     FLUID_IMPORT_OK = False
+    print("[audio] pyfluidsynth FAILED:", repr(_e), flush=True)
 
 try:
     # --- Повторный фикс: fluidsynth мог сбросить sys.stdout ---
@@ -29,8 +48,11 @@ try:
             _sys.stderr = open(os.devnull, "w")
     from music21 import converter
     MUSIC21_OK = True
-except ImportError:
+except Exception as _e:
     MUSIC21_OK = False
+    print("[audio] music21 FAILED:", repr(_e), flush=True)
+    import traceback
+    traceback.print_exc()
 
 
 # ---------- Настройки ----------
@@ -43,6 +65,8 @@ def _find_soundfont():
         candidates.append(os.path.join(exe_dir, "_internal", "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
         candidates.append(os.path.join(exe_dir, "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
         candidates.append(os.path.join(exe_dir, "Arachno_SoundFont_Version_1.0.sf2"))
+        candidates.append(os.path.join(exe_dir, "tools", "fluidsynth", "soundfonts", "Arachno_SoundFont_Version_1.0.sf2"))
+        candidates.append(os.path.join(exe_dir, "tools", "fluidsynth", "Arachno_SoundFont_Version_1.0.sf2"))
     # 2. Рядом с исходником
     candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
@@ -62,7 +86,22 @@ NOTE_TAIL = 1.35
 RIGHT_VEL = 100
 LEFT_VEL = 70
 
-AUDIVERIS_EXE = r"C:\Program Files\Audiveris\Audiveris.exe"
+def _find_audiveris():
+    """Ищет Audiveris рядом с exe или в стандартных путях."""
+    import sys as _sys
+    candidates = []
+    if getattr(_sys, "frozen", False):
+        exe_dir = os.path.dirname(_sys.executable)
+        candidates.append(os.path.join(exe_dir, "tools", "audiveris", "Audiveris.exe"))
+        candidates.append(os.path.join(exe_dir, "audiveris", "Audiveris.exe"))
+    candidates.append(r"C:\Program Files\Audiveris\Audiveris.exe")
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[-1]
+
+
+AUDIVERIS_EXE = _find_audiveris()
 OMR_OUTPUT_DIR = r"C:\out_omr"
 MANUAL_BPM = 72.0
 
@@ -181,7 +220,21 @@ def run_audiveris(pdf_path: str) -> str:
         AUDIVERIS_EXE, "-batch", "-transcribe", "-export",
         "-output", OMR_OUTPUT_DIR, "--", pdf_path
     ]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=900)
+    # --- Портативная Java: ищем рядом с exe ---
+    env = os.environ.copy()
+    java_home = None
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        for jh in [os.path.join(exe_dir, "tools", "java"),
+                   os.path.join(exe_dir, "java")]:
+            if os.path.exists(os.path.join(jh, "bin", "java.exe")):
+                java_home = jh
+                break
+    if java_home:
+        env["JAVA_HOME"] = java_home
+        env["PATH"] = os.path.join(java_home, "bin") + os.pathsep + env.get("PATH", "")
+        print("[audio] Using portable Java:", java_home, flush=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=900, env=env)
 
     for ext in (".mxl", ".xml", ".musicxml"):
         c = os.path.join(OMR_OUTPUT_DIR, base + ext)

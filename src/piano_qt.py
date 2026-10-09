@@ -394,6 +394,7 @@ class PianoWindow(QMainWindow):
                     _cand.append(os.path.join(_exe_dir, "poppler", "Library", "bin"))
                     _cand.append(os.path.join(_exe_dir, "poppler", "bin"))
                 _cand.append(r"C:\poppler\Library\bin")
+                _cand.append(os.path.join(_exe_dir, "tools", "poppler", "Library", "bin"))
                 for _c in _cand:
                     if os.path.exists(os.path.join(_c, "pdfinfo.exe")):
                         poppler_path = _c
