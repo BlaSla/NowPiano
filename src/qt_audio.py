@@ -13,23 +13,32 @@ import threading
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
-
-# --- Добавляем DLL-директорию FluidSynth (рядом с exe: tools/fluidsynth) ---
+# --- Добавляем DLL-директорию FluidSynth (рядом с exe или в проекте) ---
+_here = os.path.dirname(os.path.abspath(__file__))
+_proj = os.path.abspath(os.path.join(_here, os.pardir))
+_fs_cands = []
 if getattr(_sys, "frozen", False):
     _exe_dir = os.path.dirname(_sys.executable)
-    for _cand in [
-        os.path.join(_exe_dir, "tools", "fluidsynth"),
+    _fs_cands += [
+        os.path.join(_exe_dir, "_internal", "tools", "fluidsynth", "bin"),
         os.path.join(_exe_dir, "tools", "fluidsynth", "bin"),
+        os.path.join(_exe_dir, "tools", "fluidsynth"),
         os.path.join(_exe_dir, "fluidsynth"),
-    ]:
-        if os.path.exists(_cand):
-            try:
-                os.add_dll_directory(_cand)
-            except Exception:
-                pass
-            os.environ["PATH"] = _cand + os.pathsep + os.environ.get("PATH", "")
-            print("[audio] FluidSynth DLL dir:", _cand, flush=True)
-            break
+    ]
+else:
+    _fs_cands += [
+        os.path.join(_proj, "tools", "fluidsynth", "bin"),
+        os.path.join(_proj, "tools", "fluidsynth"),
+    ]
+for _cand in _fs_cands:
+    if os.path.exists(_cand):
+        try:
+            os.add_dll_directory(_cand)
+        except Exception:
+            pass
+        os.environ["PATH"] = _cand + os.pathsep + os.environ.get("PATH", "")
+        print("[audio] FluidSynth DLL dir:", _cand, flush=True)
+        break
 
 try:
     import fluidsynth
