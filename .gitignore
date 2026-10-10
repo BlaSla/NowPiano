@@ -1,11 +1,37 @@
-﻿__pycache__/
+# Python
+__pycache__/
 *.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller
 build/
 dist/
-*.spec
-*.log
-.idea/
-.vscode/
+*.spec.bak
+!installer/*.spec
+
+# Big binaries / runtime data (пакуются в installer отдельно)
+soundfonts/
+tools/
 out_omr/
+_archive/
+
+# Local backups
+*.bak
+*.broken
+*.clean
+*.prefix
+*.before_*
+
+# Logs
+*.log
+
+# OMR output
 *.mxl
 *.omr
+
+# IDE
+.idea/
+.vscode/
+
