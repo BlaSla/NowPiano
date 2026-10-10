@@ -7,7 +7,7 @@ import time
 import threading
 
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QElapsedTimer
-from PyQt6.QtGui import QAction, QKeySequence, QFont, QPixmap, QImage
+from PyQt6.QtGui import QAction, QKeySequence, QFont, QPixmap, QImage, QPainter, QPen, QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QSlider, QLabel, QProgressBar, QToolBar, QStatusBar,
@@ -161,6 +161,193 @@ QLabel#bpm {
 """
 
 
+
+# Международная буквенная нотация: C D E F G A B.
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+CHORD_TYPES = [
+    ((0, 4, 7), "major"), ((0, 3, 7), "minor"),
+    ((0, 3, 6), "dim"), ((0, 4, 8), "aug"),
+    ((0, 2, 7), "sus2"), ((0, 5, 7), "sus4"),
+    ((0, 4, 7, 10), "7"), ((0, 4, 7, 11), "maj7"),
+    ((0, 3, 7, 10), "m7"), ((0, 3, 7, 11), "m(maj7)"),
+    ((0, 3, 6, 10), "m7b5"), ((0, 3, 6, 9), "dim7"),
+    ((0, 4, 7, 9), "6"), ((0, 3, 7, 9), "m6"),
+    ((0, 2, 4, 7), "add9"), ((0, 2, 4, 7, 10), "9"),
+]
+
+def note_name(midi, octave=True):
+    midi = int(midi)
+    name = NOTE_NAMES[midi % 12]
+    return name + str(midi // 12 - 1) if octave else name
+
+def chord_name(notes):
+    pitches = sorted(set(int(n) % 12 for n in notes))
+    if len(pitches) < 3:
+        return ""
+    candidates = []
+    for root in pitches:
+        intervals = {(pitch - root) % 12 for pitch in pitches}
+        for template, suffix in CHORD_TYPES:
+            if intervals == set(template):
+                candidates.append((len(template), root, suffix))
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, root, suffix = candidates[0]
+    return f"{NOTE_NAMES[root]} {suffix}"
+
+
+class StaffTimelineView(QWidget):
+    """Цифровая партитура: распознанные ноты располагаются на двух нотных станах и подсвечиваются при звучании."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.events = []
+        self.duration = 0.0
+        self.position = 0.0
+        self.active_notes = set()
+        self.setMinimumHeight(280)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_events(self, events, duration):
+        self.events = list(events or [])
+        self.duration = max(float(duration or 0), 0.01)
+        self.position = 0.0
+        self.active_notes = set()
+        self.update()
+
+    def set_position(self, position, active_notes=None):
+        self.position = max(0.0, float(position or 0))
+        if active_notes is not None:
+            self.active_notes = set(active_notes)
+        self.update()
+
+    @staticmethod
+    def _pitch_y(midi, clef, y_top, line_gap):
+        # Пять линий стана: скрипичный E4..F5; басовый G2..A3.
+        if clef == 'treble':
+            base_midi, base_step = 64, 0  # E4 на нижней линии
+        else:
+            base_midi, base_step = 43, 0  # G2 на нижней линии
+        # Переводим MIDI в диатоническую ступень, учитывая буквенные ноты.
+        names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        letter_steps = {'C': 0, 'D': 1, 'E': 2, 'F': 3, 'G': 4, 'A': 5, 'B': 6}
+        def diatonic(n):
+            octave = n // 12 - 1
+            letter = names[n % 12][0]
+            return octave * 7 + letter_steps[letter]
+        steps = diatonic(midi) - diatonic(base_midi)
+        return y_top + 4 * line_gap - steps * (line_gap / 2.0)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillRect(self.rect(), QColor('#ffffff'))
+        w, h = self.width(), self.height()
+        margin_x = 54
+        top = 34
+        system_h = 118
+        line_gap = 8
+        systems = max(1, int((h - top - 12) // system_h))
+        p.setPen(QPen(QColor('#343a46'), 1))
+        p.setFont(QFont('Segoe UI', 9))
+        p.drawText(12, 20, 'Цифровая партитура — ноты C D E F G A B подсвечиваются во время воспроизведения')
+        if not self.events:
+            p.drawText(margin_x, 65, 'Загрузите PDF для распознавания или MIDI-файл')
+            p.end(); return
+        span = max(1.0, self.duration)
+        usable_w = max(100, w - margin_x - 18)
+        for sys_idx in range(systems):
+            y_base = top + sys_idx * system_h
+            if y_base + 92 > h:
+                break
+            for clef, y0 in [('treble', y_base), ('bass', y_base + 52)]:
+                for line in range(5):
+                    y = y0 + line * line_gap
+                    p.setPen(QPen(QColor('#6b7280'), 1))
+                    p.drawLine(margin_x, int(y), w - 16, int(y))
+                p.setPen(QPen(QColor('#303846'), 1))
+                p.setFont(QFont('Serif', 22))
+                p.drawText(14, int(y0 + 32), '𝄞' if clef == 'treble' else '𝄢')
+            t0 = span * sys_idx / systems
+            t1 = span * (sys_idx + 1) / systems
+            p.setFont(QFont('Segoe UI', 8))
+            p.setPen(QPen(QColor('#9aa1ad'), 1, Qt.PenStyle.DashLine))
+            for beat in range(1, 5):
+                x = margin_x + usable_w * beat / 5
+                p.drawLine(int(x), y_base, int(x), int(y_base + 88))
+            seen_bars = set()
+            for ev in self.events:
+                t = float(getattr(ev, 'time_seconds', 0.0))
+                if t < t0 or t >= t1:
+                    continue
+                x = margin_x + usable_w * ((t - t0) / max(0.001, t1 - t0))
+                bar_no = getattr(ev, 'bar', 0)
+                # Подписываем начало каждого нового такта, если номер такта доступен.
+                if bar_no and bar_no not in seen_bars:
+                    seen_bars.add(bar_no)
+                    p.setPen(QPen(QColor('#9aa1ad'), 1, Qt.PenStyle.DotLine))
+                    p.drawLine(int(x), int(y_base), int(x), int(y_base + 88))
+                    p.setPen(QColor('#7b8494'))
+                    p.setFont(QFont('Segoe UI', 7))
+                    p.drawText(int(x + 2), int(y_base - 4), str(bar_no))
+                notes = getattr(ev, 'notes', []) or []
+                for midi in notes:
+                    clef = 'treble' if int(midi) >= 60 else 'bass'
+                    y0 = y_base if clef == 'treble' else y_base + 52
+                    y = self._pitch_y(int(midi), clef, y0, line_gap)
+                    # Добавочные линейки для нот выше/ниже пяти линий стана.
+                    top_line = y0
+                    bottom_line = y0 + 4 * line_gap
+                    p.setPen(QPen(QColor('#6b7280'), 1))
+                    if y < top_line:
+                        ledger_y = top_line - line_gap
+                        while ledger_y >= y - 0.1:
+                            p.drawLine(int(x - 8), int(ledger_y), int(x + 8), int(ledger_y))
+                            ledger_y -= line_gap
+                    elif y > bottom_line:
+                        ledger_y = bottom_line + line_gap
+                        while ledger_y <= y + 0.1:
+                            p.drawLine(int(x - 8), int(ledger_y), int(x + 8), int(ledger_y))
+                            ledger_y += line_gap
+                    is_active = (int(midi) in self.active_notes and t <= self.position <= t + max(0.12, float(getattr(ev, 'duration', .2))))
+                    # Показываем диезы/бемоли, полученные из MusicXML. Для MIDI
+                    # используем читаемую энгармоническую запись по умолчанию.
+                    spelling = getattr(ev, 'spellings', {}) or {}
+                    acc = spelling.get(int(midi), '')
+                    if not acc and int(midi) % 12 in (1, 3, 6, 8, 10):
+                        acc = {1: '♭', 3: '♭', 6: '♭', 8: '♭', 10: '♭'}.get(int(midi) % 12, '')
+                    if acc:
+                        p.setPen(QPen(QColor('#e53935' if is_active else '#222831'), 1))
+                        p.setFont(QFont('Segoe UI Symbol', 15))
+                        p.drawText(int(x - 16), int(y + 5), acc)
+                    p.setPen(QPen(QColor('#e53935' if is_active else '#222831'), 2))
+                    p.setBrush(QBrush(QColor('#ffca28' if is_active else '#222831')))
+                    p.save()
+                    p.translate(x, y)
+                    p.rotate(-18)
+                    p.drawEllipse(-5, -3, 10, 6)
+                    p.restore()
+                    # Штиль
+                    p.setPen(QPen(QColor('#e53935' if is_active else '#222831'), 1.5))
+                    p.drawLine(int(x + 4), int(y), int(x + 4), int(y - 22 if clef == 'treble' else y - 18))
+                    if is_active:
+                        p.setPen(QPen(QColor('#e53935'), 2))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawEllipse(int(x-8), int(y-7), 16, 14)
+                        # Подпись текущей звучащей ноты рядом с головкой.
+                        p.save()
+                        p.setPen(QColor('#c62828'))
+                        p.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+                        p.drawText(int(x + 10), int(y - 5), note_name(midi))
+                        p.restore()
+        # Текущая позиция в виде вертикального указателя
+        sx = int(margin_x + usable_w * min(1.0, self.position / span))
+        p.setPen(QPen(QColor('#1976d2'), 2))
+        p.drawLine(sx, top, sx, min(h - 8, top + systems * system_h - 20))
+        p.end()
+
+
 # ---------- Главное окно ----------
 class PianoWindow(QMainWindow):
 
@@ -173,6 +360,14 @@ class PianoWindow(QMainWindow):
         self.setWindowTitle("NowPiano")
         self.resize(1400, 860)
         self.setMinimumSize(1000, 700)
+
+        # Иконка окна
+        _icon_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            os.pardir, "assets", "piano.ico"
+        )
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
 
         # Аудио
         self.audio = AudioEngine()
@@ -193,6 +388,7 @@ class PianoWindow(QMainWindow):
         self._last_pdf_path: str = ''
         self._pdf_pages: list = []
         self._load_gen: int = 0
+        self._loading: bool = False
 
         # Индекс следующего события для проигрывания
         self._next_event_idx = 0
@@ -349,21 +545,49 @@ class PianoWindow(QMainWindow):
         self.pdf_view = PdfView()
         self.pianoroll_view = PianoRollView()
         self.pianoroll_view.setVisible(False)
+        self.staff_view = StaffTimelineView()
+        self.staff_view.setVisible(False)
         _BACK_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "assets", "back.jpg")
         self.welcome_view = WelcomeView(_BACK_IMG)
         self.welcome_view.setVisible(False)
         root.addWidget(self.pdf_view, stretch=1)
         root.addWidget(self.welcome_view, stretch=1)
         root.addWidget(self.pianoroll_view, stretch=1)
+        root.addWidget(self.staff_view, stretch=1)
 
-        # Клавиатура
+        # Название распознаваемого аккорда — отдельно, клавиши не изменяются.
+        self.chord_label = QLabel("")
+        self.chord_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chord_label.setMinimumHeight(30)
+        self.chord_label.setMaximumHeight(36)
+        self.chord_label.setStyleSheet("""
+            QLabel { background: #eaf2ff; color: #174ea6;
+                     font-size: 15px; font-weight: bold;
+                     border-top: 1px solid #c6d9f8; padding: 3px; }
+        """)
+        root.addWidget(self.chord_label)
+
+        # Клавиатура — сохраняем исходную отрисовку и подписи клавиш.
         self.keyboard = KeyboardView()
         self.keyboard.note_clicked.connect(self.on_note_clicked)
         root.addWidget(self.keyboard, stretch=0)
 
-        # Статус
+        # Статус + отдельный индикатор распознавания PDF/MIDI
         self.status = QStatusBar()
         self.setStatusBar(self.status)
+        self.recognition_label = QLabel("Распознавание: —")
+        self.recognition_label.setMinimumWidth(170)
+        self.recognition_progress = QProgressBar()
+        self.recognition_progress.setRange(0, 100)
+        self.recognition_progress.setValue(0)
+        self.recognition_progress.setFixedWidth(150)
+        self.recognition_progress.setFixedHeight(14)
+        self.recognition_progress.setTextVisible(True)
+        self.recognition_label.setVisible(True)
+        self.recognition_progress.setVisible(True)
+        self.recognition_label.setStyleSheet("font-weight: 600; color: #303846; padding: 0 6px;")
+        self.status.addPermanentWidget(self.recognition_label)
+        self.status.addPermanentWidget(self.recognition_progress)
 
     # ---------- Загрузка PDF ----------
     def on_open(self):
@@ -380,9 +604,12 @@ class PianoWindow(QMainWindow):
         except Exception:
             pass
         self.keyboard.set_active_notes(set())
+        self.chord_label.clear()
         self.pdf_view.clear_cursor()
         self.events = []
         self._cursor_map = {}
+        self._pdf_pages = []
+        self.pdf_view.set_page(None)
         self._last_mxl = ""
         self._last_pdf_path = ""
         self.duration = 0.0
@@ -390,6 +617,13 @@ class PianoWindow(QMainWindow):
         self._next_event_idx = 0
         self._update_time_label()
         self.btn_midi.setEnabled(False)
+        self.staff_view.setVisible(False)
+
+        # Во время загрузки Play сообщает пользователю, что распознавание ещё идёт.
+        self._loading = True
+        self.btn_play.setEnabled(True)
+        self.recognition_label.setVisible(True)
+        self.recognition_progress.setVisible(True)
 
         # Новое поколение загрузки — старый фоновый поток не должен ничего менять
         self._load_gen = getattr(self, "_load_gen", 0) + 1
@@ -398,8 +632,14 @@ class PianoWindow(QMainWindow):
         self.status.showMessage(f"Загрузка: {os.path.basename(path)}")
         lower = path.lower()
         if lower.endswith((".mid", ".midi")):
+            self.recognition_label.setText("MIDI: загрузка")
+            self.recognition_progress.setRange(0, 100)
+            self.recognition_progress.setValue(0)
             threading.Thread(target=self._load_midi_worker, args=(path, gen), daemon=True).start()
         else:
+            self.recognition_label.setText("Распознавание PDF")
+            self.recognition_progress.setRange(0, 100)
+            self.recognition_progress.setValue(0)
             threading.Thread(target=self._load_pdf_worker, args=(path, gen), daemon=True).start()
 
     def _load_pdf_worker(self, path, gen):
@@ -475,7 +715,6 @@ class PianoWindow(QMainWindow):
 
     def _on_page_ready(self, pixmap):
         self.pdf_view.set_page(pixmap)
-        self.pdf_view.set_page(pixmap)
         if not hasattr(self, "_pdf_pages") or self._pdf_pages is None:
             self._pdf_pages = []
         self._pdf_pages.append(pixmap)
@@ -483,9 +722,14 @@ class PianoWindow(QMainWindow):
             self._cursor_map = self._build_cursor_map(pixmap, self.events)
 
     def _on_load_done(self, events, bpm, error):
+        self._loading = False
         self.btn_open.setEnabled(True)
         if error or events is None:
             self.status.showMessage(f"Ошибка: {error}")
+            if hasattr(self, "recognition_label"):
+                self.recognition_label.setText("Распознавание: ошибка")
+                self.recognition_progress.setRange(0, 100)
+                self.recognition_progress.setValue(0)
             QMessageBox.warning(self, "Ошибка загрузки", str(error))
             return
         self.events = events
@@ -498,27 +742,56 @@ class PianoWindow(QMainWindow):
         self.slider_bpm.setValue(int(bpm))
         self.slider_bpm.blockSignals(False)
         self.lbl_bpm.setValue(int(bpm))
-        # Показываем piano roll только если это MIDI (нет PDF-страниц)
-        _lower = (self._last_pdf_path or "").lower()
-        if _lower.endswith((".mid", ".midi")):
-            self.pianoroll_view.setVisible(False)
-            self.welcome_view.setVisible(True)
-            self.pdf_view.setVisible(False)
-        else:
-            self.pianoroll_view.setVisible(False)
-            self.welcome_view.setVisible(False)
-            self.pdf_view.setVisible(True)
-        self.btn_midi.setEnabled(True)
+        # Для PDF показываем не исходную картинку, а новую цифровую партитуру,
+        # построенную по распознанным событиям MusicXML. Это позволяет подсвечивать
+        # ноты по времени воспроизведения; исходный PDF остаётся источником OCR.
+        self.pianoroll_view.setVisible(False)
+        self.staff_view.setVisible(True)
+        self.welcome_view.setVisible(False)
+        self.pdf_view.setVisible(False)
+        self.staff_view.set_events(events, self.duration)
+        self.pianoroll_view.set_events(events, self.duration, bpm)
+        if self._pdf_pages:
+            self._cursor_map = self._build_cursor_map(self._pdf_pages[0], events)
+        self.btn_midi.setEnabled(bool(self._last_mxl) and self._last_mxl.lower().endswith((".mxl", ".musicxml", ".xml")))
         self._update_time_label()
+        if hasattr(self, "recognition_label"):
+            if self._last_pdf_path.lower().endswith(".pdf"):
+                self.recognition_label.setText(f"Ноты распознаны: {len(events)} событий")
+            else:
+                self.recognition_label.setText(f"MIDI: {len(events)} событий")
+            self.recognition_progress.setRange(0, 100)
+            self.recognition_progress.setValue(100)
         self.status.showMessage(
             f"Готово: {len(events)} событий, {self.duration:.1f} сек, Темп={bpm:.0f}"
         )
 
     def _on_status(self, text):
         self.status.showMessage(text)
+        if not hasattr(self, "recognition_progress"):
+            return
+        if "Шаг 1/3" in text:
+            self.recognition_label.setText("PDF: подготовка")
+            self.recognition_progress.setRange(0, 100)
+            self.recognition_progress.setValue(10)
+        elif "Шаг 2/3" in text or "Audiveris распознаёт" in text:
+            self.recognition_label.setText("Распознавание нот")
+            self.recognition_progress.setRange(0, 0)  # Audiveris не сообщает точный процент
+        elif "Шаг 3/3" in text:
+            self.recognition_label.setText("Разбор нот")
+            self.recognition_progress.setRange(0, 100)
+            self.recognition_progress.setValue(80)
 
     # ---------- Управление воспроизведением ----------
     def on_play_pause(self):
+        if self._loading:
+            QMessageBox.information(
+                self,
+                "Идёт распознавание нот",
+                "Программа ещё распознаёт ноты и подготавливает партитуру.\n\n"
+                "Дождитесь завершения распознавания, после этого нажмите Play ещё раз."
+            )
+            return
         if not self.events:
             self.status.showMessage("Нет партитуры — нажми «Открыть» и выбери PDF или MIDI")
             return
@@ -552,7 +825,9 @@ class PianoWindow(QMainWindow):
         self.btn_play.setText("▶")
         self.audio.all_off()
         self.keyboard.set_active_notes(set())
+        self.chord_label.clear()
         self.pdf_view.clear_cursor()
+        self.staff_view.set_position(0.0, set())
         self._update_time_label()
         self.status.showMessage("Стоп")
         # Разблокируем Open, чтобы можно было открыть другой файл
@@ -564,6 +839,7 @@ class PianoWindow(QMainWindow):
         self.audio.all_off()
         self.keyboard.set_active_notes(set())
         self.pdf_view.clear_cursor()
+        self.staff_view.set_position(0.0, set())
         self._update_time_label()
         self.status.showMessage("В начало")
 
@@ -626,6 +902,7 @@ class PianoWindow(QMainWindow):
 
         # Подсветка активных
         still_active = set()
+        still_active_right = set()
         lookback = min(self._next_event_idx, 16)
         for i in range(self._next_event_idx - lookback, self._next_event_idx):
             if i < 0:
@@ -633,11 +910,22 @@ class PianoWindow(QMainWindow):
             ev = self.events[i]
             if self.position <= ev.time_seconds + ev.duration * 1.2:
                 still_active.update(ev.notes)
+                if getattr(ev, 'hand', '') == 'R':
+                    still_active_right.update(ev.notes)
         self.keyboard.set_active_notes(still_active)
+        # Для названия аккорда в первую очередь используем правую руку,
+        # чтобы басовая нота левой руки не искажала распознавание.
+        chord = chord_name(still_active_right) or chord_name(still_active)
+        self.chord_label.setText(f"Аккорд: {chord}" if chord else "")
 
-        # Курсор в партитуре — отключён
-        # if self._next_event_idx > 0 and self._cursor_map:
-        #     self._set_cursor_for_bar(self.events[self._next_event_idx - 1].bar)
+        # MIDI: подсветить ноты, звучащие сейчас.
+        try:
+            self.staff_view.set_position(self.position, still_active)
+        except Exception:
+            pass
+        # PDF: показываем приблизительную позицию события и названия звучащих нот.
+        if self._last_pdf_path.lower().endswith('.pdf') and self._cursor_map:
+            self._set_cursor_for_bar(getattr(self.events[max(0, self._next_event_idx - 1)], 'bar', 0))
 
         # Конец трека
         if self.position >= self.duration:
@@ -651,6 +939,7 @@ class PianoWindow(QMainWindow):
                 self.btn_play.setText("▶")
                 self.audio.all_off()
                 self.keyboard.set_active_notes(set())
+                self.chord_label.clear()
                 self.pdf_view.clear_cursor()
                 self.status.showMessage("Готово")
 
@@ -734,7 +1023,7 @@ class PianoWindow(QMainWindow):
 
         if idx in self._cursor_map:
             pg, x, y = self._cursor_map[idx]
-            self.pdf_view.set_cursor(x, y, page=pg)
+            self.pdf_view.set_cursor(x, y, page=pg, notes=self.events[idx].notes)
             return
 
         prev_i = next_i = None
@@ -766,7 +1055,7 @@ class PianoWindow(QMainWindow):
                 pg = pg1
                 x = x1 + (x2 - x1) * k
                 y = y1 + (y2 - y1) * k
-        self.pdf_view.set_cursor(x, y, page=pg)
+        self.pdf_view.set_cursor(x, y, page=pg, notes=self.events[idx].notes)
 
     # ---------- Прогресс-бар ----------
     def _progress_click(self, event):
@@ -840,9 +1129,7 @@ class PianoWindow(QMainWindow):
         try:
             self.sig_status.emit("Загрузка MIDI...")
             events, bpm = load_midi_events(path)
-            # Piano roll: только данные (без визуальных изменений из потока)
-            _dur = total_duration(events)
-            self.pianoroll_view.set_events(events, _dur, bpm)
+            # Все изменения виджетов выполняются в главном потоке — через sig_load_done.
             self._last_mxl = path
             self._last_pdf_path = path
             if gen != self._load_gen:

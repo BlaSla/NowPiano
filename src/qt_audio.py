@@ -139,6 +139,7 @@ class NoteEvent:
     duration: float
     hand: str = "R"   # R - прав, L - лев
     part: int = 0
+    spellings: dict = field(default_factory=dict)  # MIDI pitch -> ♯/♭ из распознанной записи
 
 
 class AudioEngine:
@@ -293,8 +294,35 @@ def musicxml_to_events(mxl_path: str):
 
     events = []
     for part_idx, part in enumerate(used_parts):
+        # По умолчанию первая партия — правая, вторая — левая;
+        # если в MusicXML явно указан ключ, он имеет приоритет.
         hand = "R" if part_idx == 0 else "L"
+        try:
+            from music21 import clef as m21clef
+            clefs = list(part.flatten().getElementsByClass(m21clef.Clef))
+            if clefs:
+                sign = str(getattr(clefs[0], "sign", "")).upper()
+                if sign == "F":
+                    hand = "L"
+                elif sign in ("G", "C"):
+                    hand = "R"
+        except Exception:
+            pass
         for el in part.flatten().notesAndRests:
+            event_hand = hand
+            try:
+                # Уточняем руку по ключу, действующему непосредственно для ноты.
+                # Это помогает, когда обе нотные строки находятся в одной партии.
+                from music21 import clef as m21clef
+                active_clef = el.getContextByClass(m21clef.Clef)
+                if active_clef is not None:
+                    sign = str(getattr(active_clef, "sign", "")).upper()
+                    if sign == "F":
+                        event_hand = "L"
+                    elif sign in ("G", "C"):
+                        event_hand = "R"
+            except Exception:
+                pass
             dur_q = float(el.quarterLength)
             if dur_q <= 0:
                 continue
@@ -304,8 +332,19 @@ def musicxml_to_events(mxl_path: str):
             except Exception:
                 bar = 0
             if hasattr(el, "pitches") and len(el.pitches) > 0:
-                midis = sorted(p.midi for p in el.pitches)
+                pitch_objects = list(el.pitches)
+                midis = sorted(p.midi for p in pitch_objects)
                 midis = [m for m in midis if START_NOTE <= m <= START_NOTE + NUM_KEYS - 1]
+                spellings = {}
+                for pitch in pitch_objects:
+                    try:
+                        name = str(pitch.name)
+                        if '#' in name:
+                            spellings[int(pitch.midi)] = '♯'
+                        elif '-' in name:
+                            spellings[int(pitch.midi)] = '♭'
+                    except Exception:
+                        pass
                 if midis:
                     events.append(NoteEvent(
                         bar=bar,
@@ -313,7 +352,8 @@ def musicxml_to_events(mxl_path: str):
                         time_seconds=offset_q * spq,
                         notes=midis,
                         duration=max(0.05, dur_q * spq),
-                        hand=hand,
+                        hand=event_hand,
+                        spellings=spellings,
                     ))
 
     events.sort(key=lambda e: e.time_seconds)
@@ -323,14 +363,15 @@ def musicxml_to_events(mxl_path: str):
     for ev in events:
         if merged:
             last = merged[-1]
-            if abs(ev.time_seconds - last.time_seconds) < 0.02:
+            if abs(ev.time_seconds - last.time_seconds) < 0.02 and ev.hand == last.hand:
                 last.notes = sorted(set(last.notes) | set(ev.notes))
                 last.duration = max(last.duration, ev.duration)
+                last.spellings.update(ev.spellings)
                 continue
         merged.append(NoteEvent(
             bar=ev.bar, offset_q=ev.offset_q,
             time_seconds=ev.time_seconds, notes=list(ev.notes),
-            duration=ev.duration, hand=ev.hand,
+            duration=ev.duration, hand=ev.hand, spellings=dict(ev.spellings),
         ))
 
     # Нормируем время так, чтобы первая нота была в 0

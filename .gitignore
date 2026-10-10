@@ -34,4 +34,8 @@ _archive/
 # IDE
 .idea/
 .vscode/
-
+src/gpt1/
+src/old/
+src/*_ready.py
+src/README_NowPiano_ui_hands.txt
+*.spec.old
