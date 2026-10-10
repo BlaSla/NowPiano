@@ -192,6 +192,7 @@ class PianoWindow(QMainWindow):
         self._last_mxl: str = ''
         self._last_pdf_path: str = ''
         self._pdf_pages: list = []
+        self._load_gen: int = 0
 
         # Индекс следующего события для проигрывания
         self._next_event_idx = 0
@@ -348,7 +349,7 @@ class PianoWindow(QMainWindow):
         self.pdf_view = PdfView()
         self.pianoroll_view = PianoRollView()
         self.pianoroll_view.setVisible(False)
-        _BACK_IMG = r'C:\Users\blazh\OneDrive\Desktop\assets\back.jpg'
+        _BACK_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "assets", "back.jpg")
         self.welcome_view = WelcomeView(_BACK_IMG)
         self.welcome_view.setVisible(False)
         root.addWidget(self.pdf_view, stretch=1)
@@ -371,15 +372,39 @@ class PianoWindow(QMainWindow):
         )
         if not path:
             return
+
+        # Сброс предыдущей партитуры
+        self.is_playing = False
+        try:
+            self.audio.all_off()
+        except Exception:
+            pass
+        self.keyboard.set_active_notes(set())
+        self.pdf_view.clear_cursor()
+        self.events = []
+        self._cursor_map = {}
+        self._last_mxl = ""
+        self._last_pdf_path = ""
+        self.duration = 0.0
+        self.position = 0.0
+        self._next_event_idx = 0
+        self._update_time_label()
+        self.btn_midi.setEnabled(False)
+
+        # Новое поколение загрузки — старый фоновый поток не должен ничего менять
+        self._load_gen = getattr(self, "_load_gen", 0) + 1
+        gen = self._load_gen
+
         self.status.showMessage(f"Загрузка: {os.path.basename(path)}")
-        self.btn_open.setEnabled(False)
         lower = path.lower()
         if lower.endswith((".mid", ".midi")):
-            threading.Thread(target=self._load_midi_worker, args=(path,), daemon=True).start()
+            threading.Thread(target=self._load_midi_worker, args=(path, gen), daemon=True).start()
         else:
-            threading.Thread(target=self._load_pdf_worker, args=(path,), daemon=True).start()
+            threading.Thread(target=self._load_pdf_worker, args=(path, gen), daemon=True).start()
 
-    def _load_pdf_worker(self, path):
+    def _load_pdf_worker(self, path, gen):
+        if gen != self._load_gen:
+            return
         try:
             # 1. Рендер первой страницы PDF через Poppler (pdf2image)
             self.sig_status.emit("Шаг 1/3: рендер PDF...")
@@ -393,7 +418,9 @@ class PianoWindow(QMainWindow):
                     _cand.append(os.path.join(_exe_dir, "_internal", "poppler", "Library", "bin"))
                     _cand.append(os.path.join(_exe_dir, "poppler", "Library", "bin"))
                     _cand.append(os.path.join(_exe_dir, "poppler", "bin"))
-                _cand.append(r"C:\poppler\Library\bin")
+                _proj = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+                _cand.append(os.path.join(_proj, "tools", "poppler", "Library", "bin"))
+                _cand.append(os.path.join(_proj, "tools", "poppler", "bin"))
                 _cand.append(os.path.join(_exe_dir, "tools", "poppler", "Library", "bin"))
                 for _c in _cand:
                     if os.path.exists(os.path.join(_c, "pdfinfo.exe")):
@@ -416,7 +443,21 @@ class PianoWindow(QMainWindow):
 
             # 2. Audiveris
             self.sig_status.emit("Шаг 2/3: Audiveris распознаёт (может занять минуту)...")
-            mxl = run_audiveris(path)
+            try:
+                mxl = run_audiveris(path)
+            except Exception as e:
+                msg = f"Audiveris не смог распознать ноты: {e}"
+                print("[audiveris]", msg, flush=True)
+                if gen != self._load_gen:
+                    return
+                self.sig_load_done.emit(None, MANUAL_BPM, msg)
+                return
+            if not mxl or not os.path.exists(mxl):
+                if gen != self._load_gen:
+                    return
+                self.sig_load_done.emit(None, MANUAL_BPM,
+                    "Audiveris не вернул MXL. Попробуйте другой PDF.")
+                return
             self._last_mxl = mxl
             self._last_pdf_path = path
 
@@ -424,13 +465,20 @@ class PianoWindow(QMainWindow):
             self.sig_status.emit("Шаг 3/3: разбор MusicXML...")
             events, bpm, n_parts = musicxml_to_events(mxl)
 
+            if gen != self._load_gen:
+                return
             self.sig_load_done.emit(events, bpm, "")
         except Exception as e:
+            if gen != self._load_gen:
+                return
             self.sig_load_done.emit(None, MANUAL_BPM, str(e))
 
     def _on_page_ready(self, pixmap):
         self.pdf_view.set_page(pixmap)
-        self._pdf_pages = [pixmap]
+        self.pdf_view.set_page(pixmap)
+        if not hasattr(self, "_pdf_pages") or self._pdf_pages is None:
+            self._pdf_pages = []
+        self._pdf_pages.append(pixmap)
         if self.events:
             self._cursor_map = self._build_cursor_map(pixmap, self.events)
 
@@ -472,7 +520,7 @@ class PianoWindow(QMainWindow):
     # ---------- Управление воспроизведением ----------
     def on_play_pause(self):
         if not self.events:
-            self.status.showMessage("Сначала загрузи PDF")
+            self.status.showMessage("Нет партитуры — нажми «Открыть» и выбери PDF или MIDI")
             return
         if self.is_playing:
             self.is_playing = False
@@ -507,6 +555,8 @@ class PianoWindow(QMainWindow):
         self.pdf_view.clear_cursor()
         self._update_time_label()
         self.status.showMessage("Стоп")
+        # Разблокируем Open, чтобы можно было открыть другой файл
+        self.btn_open.setEnabled(True)
 
     def on_rewind(self):
         self.position = 0.0
@@ -585,9 +635,9 @@ class PianoWindow(QMainWindow):
                 still_active.update(ev.notes)
         self.keyboard.set_active_notes(still_active)
 
-        # Курсор в партитуре
-        if self._next_event_idx > 0 and self._cursor_map:
-            self._set_cursor_for_bar(self.events[self._next_event_idx - 1].bar)
+        # Курсор в партитуре — отключён
+        # if self._next_event_idx > 0 and self._cursor_map:
+        #     self._set_cursor_for_bar(self.events[self._next_event_idx - 1].bar)
 
         # Конец трека
         if self.position >= self.duration:
@@ -783,8 +833,10 @@ class PianoWindow(QMainWindow):
         else:
             self.status.showMessage("Ошибка экспорта MIDI")
             QMessageBox.warning(self, "Ошибка", "Не удалось сохранить MIDI.")
-    def _load_midi_worker(self, path):
+    def _load_midi_worker(self, path, gen):
         """Загружает .mid/.midi без Audiveris и PDF."""
+        if gen != self._load_gen:
+            return
         try:
             self.sig_status.emit("Загрузка MIDI...")
             events, bpm = load_midi_events(path)
@@ -793,8 +845,12 @@ class PianoWindow(QMainWindow):
             self.pianoroll_view.set_events(events, _dur, bpm)
             self._last_mxl = path
             self._last_pdf_path = path
+            if gen != self._load_gen:
+                return
             self.sig_load_done.emit(events, bpm, "")
         except Exception as e:
+            if gen != self._load_gen:
+                return
             self.sig_load_done.emit(None, MANUAL_BPM, f"Ошибка MIDI: {e}")
     def closeEvent(self, event):
         self.is_playing = False

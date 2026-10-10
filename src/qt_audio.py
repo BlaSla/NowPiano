@@ -59,21 +59,25 @@ except Exception as _e:
 def _find_soundfont():
     import sys as _sys
     candidates = []
-    # 1. Рядом с .exe (для установленной версии)
+    name = "Arachno_SoundFont_Version_1.0.sf2"
+    alt  = "FluidR3_GM.sf2"
+    here = os.path.dirname(os.path.abspath(__file__))
+    proj = os.path.abspath(os.path.join(here, os.pardir))
+    # 1. {проект}/soundfonts/ (dev)
+    candidates.append(os.path.join(proj, "soundfonts", name))
+    candidates.append(os.path.join(proj, "soundfonts", alt))
+    # 2. Рядом с .exe (для установленной версии)
     if getattr(_sys, "frozen", False):
         exe_dir = os.path.dirname(_sys.executable)
-        candidates.append(os.path.join(exe_dir, "_internal", "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
-        candidates.append(os.path.join(exe_dir, "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
-        candidates.append(os.path.join(exe_dir, "Arachno_SoundFont_Version_1.0.sf2"))
-        candidates.append(os.path.join(exe_dir, "tools", "fluidsynth", "soundfonts", "Arachno_SoundFont_Version_1.0.sf2"))
-        candidates.append(os.path.join(exe_dir, "tools", "fluidsynth", "Arachno_SoundFont_Version_1.0.sf2"))
-    # 2. Рядом с исходником
-    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "SoundFonts", "Arachno_SoundFont_Version_1.0.sf2"))
-    # 3. Пользовательские места
+        candidates.append(os.path.join(exe_dir, "soundfonts", name))
+        candidates.append(os.path.join(exe_dir, "soundfonts", alt))
+        candidates.append(os.path.join(exe_dir, "_internal", "soundfonts", name))
+        candidates.append(os.path.join(exe_dir, "SoundFonts", name))
+        candidates.append(os.path.join(exe_dir, name))
+    # 3. Пользовательские места (fallback)
     candidates.append(r"C:\tools\fluidsynth\soundfonts\Arachno_SoundFont_Version_1.0.sf2")
     candidates.append(os.path.join(os.path.expanduser("~"),
-                                   ".aldakit", "soundfonts", "Arachno_SoundFont_Version_1.0.sf2"))
+                                   ".aldakit", "soundfonts", name))
     for c in candidates:
         if os.path.exists(c):
             return c
@@ -87,13 +91,20 @@ RIGHT_VEL = 100
 LEFT_VEL = 70
 
 def _find_audiveris():
-    """Ищет Audiveris рядом с exe или в стандартных путях."""
+    """Ищет Audiveris рядом с exe, в проекте или в стандартных путях."""
     import sys as _sys
     candidates = []
+    here = os.path.dirname(os.path.abspath(__file__))
+    proj = os.path.abspath(os.path.join(here, os.pardir))
+    # 1. {проект}/tools/audiveris/Audiveris.exe (dev)
+    candidates.append(os.path.join(proj, "tools", "audiveris", "Audiveris.exe"))
+    # 2. Рядом с .exe (для установленной версии)
     if getattr(_sys, "frozen", False):
         exe_dir = os.path.dirname(_sys.executable)
         candidates.append(os.path.join(exe_dir, "tools", "audiveris", "Audiveris.exe"))
         candidates.append(os.path.join(exe_dir, "audiveris", "Audiveris.exe"))
+        candidates.append(os.path.join(exe_dir, "_internal", "tools", "audiveris", "Audiveris.exe"))
+    # 3. Пользовательские (fallback)
     candidates.append(r"C:\Program Files\Audiveris\Audiveris.exe")
     for c in candidates:
         if os.path.exists(c):
@@ -102,7 +113,7 @@ def _find_audiveris():
 
 
 AUDIVERIS_EXE = _find_audiveris()
-OMR_OUTPUT_DIR = r"C:\out_omr"
+OMR_OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "out_omr"))
 MANUAL_BPM = 72.0
 
 START_NOTE = 21
