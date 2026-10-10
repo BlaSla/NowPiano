@@ -388,8 +388,8 @@ class PianoWindow(QMainWindow):
                 from pdf2image import convert_from_path
                 poppler_path = None
                 _cand = []
+                _exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
                 if getattr(sys, "frozen", False):
-                    _exe_dir = os.path.dirname(sys.executable)
                     _cand.append(os.path.join(_exe_dir, "_internal", "poppler", "Library", "bin"))
                     _cand.append(os.path.join(_exe_dir, "poppler", "Library", "bin"))
                     _cand.append(os.path.join(_exe_dir, "poppler", "bin"))

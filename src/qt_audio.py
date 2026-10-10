@@ -223,8 +223,8 @@ def run_audiveris(pdf_path: str) -> str:
     # --- Портативная Java: ищем рядом с exe ---
     env = os.environ.copy()
     java_home = None
-    if getattr(sys, "frozen", False):
-        exe_dir = os.path.dirname(sys.executable)
+    if getattr(_sys, "frozen", False):
+        exe_dir = os.path.dirname(_sys.executable)
         for jh in [os.path.join(exe_dir, "tools", "java"),
                    os.path.join(exe_dir, "java")]:
             if os.path.exists(os.path.join(jh, "bin", "java.exe")):

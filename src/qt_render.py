@@ -194,7 +194,7 @@ class PdfView(QWidget):
         self._pixmap = pixmap
         self.update()
 
-    def set_cursor(self, x: float, y: float):
+    def set_cursor(self, x: float, y: float, page=None):
         self._cursor_xy = (x, y)
         self.update()
 
