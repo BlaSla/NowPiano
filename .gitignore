@@ -9,3 +9,12 @@ __pycache__/
 *.pyc
 *.spec
 *.exe
+*.bak
+patch_*.py
+fix_*.py
+rollback_*.py
+test_homr*/
+test_png/
+test_*/
+bundle_log.txt
+exe_log.txt
