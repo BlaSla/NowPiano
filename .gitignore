@@ -1,0 +1,11 @@
+﻿venv/
+dist/
+build/
+installer_output/
+out_omr/
+soundfonts/
+tools/
+__pycache__/
+*.pyc
+*.spec
+*.exe
