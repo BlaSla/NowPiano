@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # --- Fix stdout/stderr encoding on Windows ---
 try:
     import sys as _sys_enc
@@ -238,6 +238,7 @@ class NoteEvent:
     duration: float
     hand: str = "R"   # R - Р С—РЎР‚Р В°Р Р†, L - Р В»Р ВµР Р†
     part: int = 0
+    note_names: dict = field(default_factory=dict)
 
 
 class AudioEngine:
@@ -626,7 +627,113 @@ def run_homr_image(image_path):
 
 
 # ---------- MusicXML -> РЎРѓР С•Р В±РЎвЂ№РЎвЂљР С‘РЎРЏ ----------
-def musicxml_to_events(mxl_path: str):
+def recognize_tempo_from_image(image_path: str):
+    """Recognize an explicit tempo marking in a score image."""
+    import json
+    import re
+    import subprocess
+
+    try:
+        app_dir = (
+            os.path.dirname(os.path.abspath(sys.executable))
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+
+        candidates = [
+            os.path.join(app_dir, "tools", "python", "python.exe"),
+            os.path.join(app_dir, "dist", "NowPiano", "tools", "python", "python.exe"),
+        ]
+
+        python_path = next((p for p in candidates if os.path.isfile(p)), None)
+        if not python_path:
+            return None
+
+        bundle_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(python_path))
+        )
+        site_packages = os.path.join(
+            bundle_root, "tools", "python", "Lib", "site-packages"
+        )
+        internal_dir = os.path.join(bundle_root, "_internal")
+
+        env = os.environ.copy()
+        extra_paths = [site_packages, internal_dir]
+        existing = env.get("PYTHONPATH", "")
+        if existing:
+            extra_paths.append(existing)
+        env["PYTHONPATH"] = os.pathsep.join(extra_paths)
+
+        ocr_script = (
+            "import json,sys; from rapidocr import RapidOCR; "
+            "r=RapidOCR()(sys.argv[1]); "
+            "print('NOWPIANO_OCR_JSON:'+json.dumps("
+            "{'txts':list(r.txts or []),"
+            "'scores':[float(x) for x in (r.scores or [])]}))"
+        )
+
+        result = subprocess.run(
+            [python_path, "-c", ocr_script, os.path.abspath(image_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        marker = "NOWPIANO_OCR_JSON:"
+        payload = next(
+            (line.split(marker, 1)[1]
+             for line in reversed(result.stdout.splitlines())
+             if marker in line),
+            None,
+        )
+        if result.returncode != 0 or payload is None:
+            print("[tempo-ocr] OCR unavailable; using MusicXML/default tempo.")
+            return None
+
+        data = json.loads(payload)
+        texts = data.get("txts", [])
+        scores = data.get("scores", [])
+        matches = []
+
+        # Require a tempo-like marker, such as OCR's "J=134".
+        pattern = re.compile(
+            r"(?:[jil|!]|[♩♪])\s*(?:=|:)?\s*(\d{2,3})",
+            re.IGNORECASE,
+        )
+
+        for index, text in enumerate(texts):
+            confidence = float(scores[index]) if index < len(scores) else 0.0
+            if confidence < 0.60:
+                continue
+
+            match = pattern.search(str(text))
+            if not match:
+                continue
+
+            bpm = int(match.group(1))
+            if 20 < bpm < 400:
+                matches.append((confidence, bpm, str(text)))
+
+        if not matches:
+            return None
+
+        confidence, bpm, text = max(matches, key=lambda item: item[0])
+        print(
+            f"[tempo-ocr] Recognized tempo: {bpm} BPM "
+            f"(text={text!r}, confidence={confidence:.2f})",
+            flush=True,
+        )
+        return float(bpm)
+
+    except Exception as exc:
+        print(f"[tempo-ocr] Recognition skipped: {exc}", flush=True)
+        return None
+
+def musicxml_to_events(mxl_path: str, bpm_override=None):
     """Р СџР В°РЎР‚РЎРѓР С‘РЎвЂљ MusicXML Р С‘ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµРЎвЂљ РЎР‚Р В°Р В·Р Т‘Р ВµР В»Р ВµР Р…Р С‘Р Вµ Р С—РЎР‚Р В°Р Р†Р С•Р в„–/Р В»Р ВµР Р†Р С•Р в„– РЎР‚РЎС“Р С”Р С‘.
 
     Р вЂ™Р В°Р В¶Р Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘Р Р…РЎвЂ Р С‘Р С—: Р Р…Р ВµР В»РЎРЉР В·РЎРЏ Р С•Р В±РЎР‰Р ВµР Т‘Р С‘Р Р…РЎРЏРЎвЂљРЎРЉ Р С•Р Т‘Р Р…Р С•Р Р†РЎР‚Р ВµР СР ВµР Р…Р Р…РЎвЂ№Р Вµ Р Р…Р С•РЎвЂљРЎвЂ№ РЎР‚Р В°Р В·Р Р…РЎвЂ№РЎвЂ¦ РЎР‚РЎС“Р С” Р Р† Р С•Р Т‘Р Р…Р С•
@@ -638,16 +745,49 @@ def musicxml_to_events(mxl_path: str):
         raise RuntimeError("music21 Р Р…Р Вµ РЎС“РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р В»Р ВµР Р…")
 
     score = converter.parse(mxl_path)
-    bpm = MANUAL_BPM
-    marks = score.metronomeMarkBoundaries()
-    if marks:
-        try:
-            bpm = float(marks[0][2].number)
-        except Exception:
-            pass
-    if bpm > 110 and abs(bpm - MANUAL_BPM) > 20:
-        bpm = MANUAL_BPM
+    def _find_bpm(sc, default=MANUAL_BPM, xml_path=None):
+        # 1) Сначала читаем СЫРОЙ XML: ищем <sound tempo=>, <metronome><per-minute>, <words>=134
+        #    (music21 всегда подставляет свой MetronomeMark=120, если темпа в XML нет —
+        #     поэтому доверять sc.metronomeMarkBoundaries() без проверки исходника нельзя).
+        if xml_path:
+            try:
+                import zipfile, re as _re2
+                raw = None
+                if str(xml_path).lower().endswith('.mxl'):
+                    with zipfile.ZipFile(xml_path, 'r') as z:
+                        for n in z.namelist():
+                            if n.lower().endswith('.xml') and 'META-INF' not in n:
+                                raw = z.read(n).decode('utf-8', 'ignore'); break
+                else:
+                    with open(xml_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        raw = f.read()
+                if raw:
+                    m = _re2.search(r'<sound[^>]*tempo\s*=\s*[\"](\d{2,3})[\"]', raw)
+                    if m:
+                        v = float(m.group(1))
+                        if 20 < v < 400: return v
+                    m = _re2.search(r'<per-minute>\s*(\d{2,3})\s*</per-minute>', raw)
+                    if m:
+                        v = float(m.group(1))
+                        if 20 < v < 400: return v
+                    m = _re2.search(r'=\s*(\d{2,3})', raw)
+                    if m:
+                        v = float(m.group(1))
+                        if 20 < v < 400: return v
+            except Exception:
+                pass
+        # 2) Если в XML темпа нет — возвращаем default (MANUAL_BPM),
+        #    НЕ доверяя metronomeMarkBoundaries (он даёт 120 по умолчанию).
+        return default
 
+    bpm = _find_bpm(score, MANUAL_BPM, mxl_path)
+    if bpm_override is not None:
+        try:
+            override = float(bpm_override)
+            if 20 < override < 400:
+                bpm = override
+        except (TypeError, ValueError):
+            pass
     spq = 60.0 / bpm
     used_parts = [p for p in score.parts if len(list(p.flatten().notes)) > 0]
     if not used_parts:
@@ -665,8 +805,12 @@ def musicxml_to_events(mxl_path: str):
             except Exception:
                 bar = 0
 
-            midis = sorted(int(p.midi) for p in el.pitches)
-            midis = [m for m in midis if START_NOTE <= m <= START_NOTE + NUM_KEYS - 1]
+            spelling_by_midi = {
+                int(p.midi): str(p.name)
+                for p in el.pitches
+                if START_NOTE <= int(p.midi) <= START_NOTE + NUM_KEYS - 1
+            }
+            midis = sorted(spelling_by_midi)
             if not midis:
                 continue
 
@@ -706,6 +850,7 @@ def musicxml_to_events(mxl_path: str):
                     duration=max(0.05, dur_q * spq),
                     hand=hand,
                     part=part_idx,
+                    note_names={m: spelling_by_midi[m] for m in hand_midis if m in spelling_by_midi},
                 ))
 
     events.sort(key=lambda e: (e.time_seconds, 0 if e.hand == "R" else 1))
@@ -723,6 +868,7 @@ def musicxml_to_events(mxl_path: str):
                 break
         if match is not None:
             match.notes = sorted(set(match.notes) | set(ev.notes))
+            match.note_names.update(ev.note_names)
             match.duration = max(match.duration, ev.duration)
         else:
             merged.append(NoteEvent(
@@ -733,6 +879,7 @@ def musicxml_to_events(mxl_path: str):
                 duration=ev.duration,
                 hand=ev.hand,
                 part=ev.part,
+                note_names=dict(ev.note_names),
             ))
 
     if merged:

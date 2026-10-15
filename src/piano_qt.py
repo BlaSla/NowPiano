@@ -11,7 +11,7 @@ from PyQt6.QtGui import QAction, QKeySequence, QFont, QPixmap, QImage, QPainter,
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QSlider, QLabel, QProgressBar, QToolBar, QStatusBar,
-    QSizePolicy, QFileDialog, QMessageBox, QSpinBox
+    QSizePolicy, QFileDialog, QMessageBox, QSpinBox, QDialog
 )
 
 # --- PyInstaller windowed mode fix: sys.stdout/stderr = None ---
@@ -21,7 +21,7 @@ if getattr(sys, "frozen", False):
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
 from qt_audio import (
-    AudioEngine, run_audiveris, run_homr, run_homr_image, _image_to_pdf, musicxml_to_events,
+    AudioEngine, run_audiveris, run_homr, run_homr_image, recognize_tempo_from_image, _image_to_pdf, musicxml_to_events,
     total_duration, NoteEvent, MANUAL_BPM, START_NOTE, NUM_KEYS,
     SOUNDFONT_PATH, AUDIVERIS_EXE,
     export_midi, load_midi_events, render_score_to_pngs
@@ -210,6 +210,13 @@ class StaffTimelineView(QWidget):
         self.active_notes = set()
         self.active_right = set()
         self.active_left = set()
+        self._played_notes = set()
+        self._dragging_cursor = False
+        self._manual_view = False
+        self._drag_t0 = 0.0
+        self._drag_window = 8.0
+        self.seek_callback = None
+        self.setMouseTracking(True)
         self.setMinimumHeight(300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -218,6 +225,7 @@ class StaffTimelineView(QWidget):
         self.duration = max(float(duration or 0), 0.01)
         self.position = 0.0
         self.active_notes = set(); self.active_right = set(); self.active_left = set()
+        self._played_notes = set()
         self.update()
 
     def set_position(self, position, active_notes=None, right_notes=None, left_notes=None):
@@ -225,6 +233,9 @@ class StaffTimelineView(QWidget):
         if active_notes is not None: self.active_notes = set(active_notes)
         if right_notes is not None: self.active_right = set(right_notes)
         if left_notes is not None: self.active_left = set(left_notes)
+        self._played_notes.update(self.active_notes)
+        self._played_notes.update(self.active_right)
+        self._played_notes.update(self.active_left)
         self.update()
 
     @staticmethod
@@ -235,6 +246,51 @@ class StaffTimelineView(QWidget):
         def dia(n):
             return (n // 12 - 1) * 7 + steps[names[n % 12][0]]
         return y_top + 4 * line_gap - (dia(int(midi)) - dia(base)) * (line_gap / 2.0)
+
+    def _time_at_x(self, x):
+        w = max(1, self.width())
+        left = 62
+        right = w - 22
+        window = max(6.0, min(12.0, (right-left) / 95.0))
+        if self._dragging_cursor or self._manual_view:
+            t0 = self._drag_t0
+            window = self._drag_window
+        else:
+            t0 = max(0.0, self.position - window * 0.22)
+        frac = max(0.0, min(1.0, (float(x)-left) / max(1.0, right-left)))
+        return max(0.0, min(self.duration, t0 + frac * window))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.events and self.duration > 0:
+            w = max(1, self.width())
+            left, right = 62, w - 22
+            self._drag_window = max(6.0, min(12.0, (right-left) / 95.0))
+            self._drag_t0 = max(0.0, self.position - self._drag_window * 0.22)
+            self._dragging_cursor = True
+            self._manual_view = True
+            if callable(self.seek_callback):
+                self.seek_callback(self._time_at_x(event.position().x()))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging_cursor and (event.buttons() & Qt.MouseButton.LeftButton):
+            if callable(self.seek_callback):
+                self.seek_callback(self._time_at_x(event.position().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging_cursor and event.button() == Qt.MouseButton.LeftButton:
+            if callable(self.seek_callback):
+                self.seek_callback(self._time_at_x(event.position().x()))
+            self._dragging_cursor = False
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -257,14 +313,18 @@ class StaffTimelineView(QWidget):
         # Follow playback: keep a short readable time window rather than compressing
         # the entire piece into a few pixels. The notes scroll from right to left.
         window = max(6.0, min(12.0, (right-left) / 95.0))
-        t0 = max(0.0, self.position - window * 0.22)
+        if self._dragging_cursor or self._manual_view:
+            t0 = self._drag_t0
+            window = self._drag_window
+        else:
+            t0 = max(0.0, self.position - window * 0.22)
         t1 = t0 + window
         def xpos(t): return left + (float(t)-t0) / max(.001, window) * (right-left)
 
-        treble_y = top + 8; bass_y = top + staff_h + 170
+        treble_y = top + 8; bass_y = top + staff_h + 128
         if bass_y + staff_h > h - 18:
             line_gap = max(7, (h - top - 80) / 12); staff_h = 4 * line_gap
-            treble_y = top + 8; bass_y = top + staff_h + 160
+            treble_y = top + 8; bass_y = top + staff_h + 118
         # Если после пересчёта снизу осталось много места — сдвинуть блок вниз
         _bottom_used = bass_y + staff_h + 8
         _extra = h - _bottom_used - top
@@ -310,15 +370,46 @@ class StaffTimelineView(QWidget):
                 p.setPen(QPen(color.darker(125) if not active else QColor('#e53935'), 1.5))
                 p.setBrush(QBrush(color.lighter(125) if active else color))
                 p.save(); p.translate(x, y); p.rotate(-18); p.drawEllipse(QRectF(-6, -4, 12, 8)); p.restore()
+                # Show accidentals beside noteheads when spelling contains them.
+                spelling = str(getattr(ev, "note_names", {}).get(int(midi), ""))
+                accidental = ""
+                if "#" in spelling:
+                    accidental = chr(0x266f)
+                elif "-" in spelling:
+                    accidental = chr(0x266d)
+                if accidental:
+                    p.save()
+                    p.setPen(color.darker(120))
+                    p.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
+                    p.drawText(
+                        QRectF(x - 21, y - 10, 14, 18),
+                        Qt.AlignmentFlag.AlignCenter,
+                        accidental
+                    )
+                    p.restore()
                 p.setPen(QPen(color.darker(120), 1.4)); p.drawLine(int(x+5), int(y), int(x+5), int(y-22 if hand=='R' else y-18))
-                # Colored note label, always visible for current/nearby notes.
-                if active or abs(t-self.position) < .45:
-                    label = note_name(midi)
-                    p.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
-                    p.setPen(QColor('#ffffff')); p.setBrush(QBrush(color.darker(115)))
-                    tag_w = max(30, p.fontMetrics().horizontalAdvance(label)+8)
-                    p.drawRoundedRect(QRectF(x+7, y-25, tag_w, 16), 4, 4)
-                    p.drawText(QRectF(x+11, y-25, tag_w-4, 16), Qt.AlignmentFlag.AlignVCenter, label)
+                # Note labels: single notes share a line; chords stack vertically.
+                notes_sorted = sorted({int(n) for n in ev.notes}, reverse=True)
+                rank = notes_sorted.index(int(midi))
+                count = len(notes_sorted)
+                label = ev.note_names.get(int(midi), note_name(midi))
+                label = label.replace("#", chr(0x266f)).replace("-", chr(0x266d))
+                p.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
+                p.setPen(color.darker(120))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+
+                if hand == 'R':
+                    base_y = int(treble_y - 18 - 3 * line_gap)
+                    label_y = base_y - (count - 1 - rank) * 14
+                else:
+                    base_y = int(bass_y + staff_h + 15 + 2 * line_gap)
+                    label_y = base_y + rank * 14
+
+                p.drawText(
+                    QRectF(x - 20, label_y - 11, 46, 14),
+                    Qt.AlignmentFlag.AlignCenter,
+                    label
+                )
 
         # Fixed playhead makes the score appear to move underneath it.
         cursor_x = xpos(self.position)
@@ -343,10 +434,10 @@ class PianoWindow(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         # Иконка окна
-        _icon_path = os.path.join(
+        _icon_path = os.path.abspath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            os.pardir, "assets", "piano.ico"
-        )
+            os.pardir, "resources", "app_icon.png"
+        ))
         if os.path.exists(_icon_path):
             self.setWindowIcon(QIcon(_icon_path))
 
@@ -363,6 +454,8 @@ class PianoWindow(QMainWindow):
         self.is_playing = False
         self.loop_enabled = False
         self._elapsed = QElapsedTimer()
+        self._flash_notes = {}  # midi -> время старта (для вспышки на клавише)
+        self._flash_notes = {}  # midi -> время старта (для вспышки на клавише)
         self._elapsed.start()
         self._cursor_map: dict = {}
         self._last_mxl: str = ''
@@ -430,15 +523,24 @@ class PianoWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        self.btn_open = QPushButton("📂 Open")
+        self.btn_open = QPushButton("Open")
+        self.btn_open.setFixedWidth(72)
         self.btn_open.clicked.connect(self.on_open)
         tb.addWidget(self.btn_open)
 
-        self.btn_midi = QPushButton("💾 MIDI")
+        self.btn_midi = QPushButton("MIDI")
+        self.btn_midi.setFixedWidth(64)
         self.btn_midi.setToolTip("Экспорт текущей партитуры в MIDI")
         self.btn_midi.clicked.connect(self.on_export_midi)
         self.btn_midi.setEnabled(False)
         tb.addWidget(self.btn_midi)
+
+        self.btn_about = QPushButton("\u2139")
+        self.btn_about.setFixedWidth(34)
+        self.btn_about.setToolTip("О программе NowPiano")
+        self.btn_about.setToolTip("Информация о NowPiano")
+        self.btn_about.clicked.connect(self._show_about)
+        tb.addWidget(self.btn_about)
 
         tb.addSeparator()
 
@@ -527,7 +629,10 @@ class PianoWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setMinimumWidth(300)
         self.progress.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.progress.setMouseTracking(True)
         self.progress.mousePressEvent = self._progress_click
+        self.progress.mouseMoveEvent = self._progress_move
+        self.progress.mouseReleaseEvent = self._progress_release
         tb.addWidget(self.progress)
 
         self.lbl_time = QLabel("00:00 / 00:00")
@@ -560,6 +665,7 @@ class PianoWindow(QMainWindow):
         self.pianoroll_view = PianoRollView()
         self.pianoroll_view.setVisible(False)
         self.staff_view = StaffTimelineView()
+        self.staff_view.seek_callback = self._seek_to_time
         self.staff_view.setVisible(False)
         _BACK_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "assets", "back.jpg")
         self.welcome_view = WelcomeView(_BACK_IMG)
@@ -569,17 +675,39 @@ class PianoWindow(QMainWindow):
         root.addWidget(self.pianoroll_view, stretch=1)
         root.addWidget(self.staff_view, stretch=1)
 
-        # Название распознаваемого аккорда — отдельно, клавиши не изменяются.
-        self.chord_label = QLabel("")
-        self.chord_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.chord_label.setMinimumHeight(30)
-        self.chord_label.setMaximumHeight(36)
-        self.chord_label.setStyleSheet("""
-            QLabel { background: #eaf2ff; color: #174ea6;
-                     font-size: 15px; font-weight: bold;
-                     border-top: 1px solid #c6d9f8; padding: 3px; }
+        # Два независимых индикатора аккордов — по рукам.
+        chord_panel = QWidget()
+        chord_layout = QHBoxLayout(chord_panel)
+        chord_layout.setContentsMargins(8, 4, 8, 4)
+        chord_layout.setSpacing(8)
+
+        self.chord_left_label = QLabel("ЛЕВАЯ РУКА: —")
+        self.chord_left_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chord_left_label.setMinimumHeight(38)
+        self.chord_left_label.setStyleSheet("""
+            QLabel {
+                background: #e4f6ee; color: #08784d;
+                font-size: 15px; font-weight: bold;
+                border: 1px solid #9bd8bd; border-radius: 7px;
+                padding: 4px;
+            }
         """)
-        root.addWidget(self.chord_label)
+
+        self.chord_right_label = QLabel("ПРАВАЯ РУКА: —")
+        self.chord_right_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chord_right_label.setMinimumHeight(38)
+        self.chord_right_label.setStyleSheet("""
+            QLabel {
+                background: #eaf2ff; color: #174ea6;
+                font-size: 15px; font-weight: bold;
+                border: 1px solid #b4cff8; border-radius: 7px;
+                padding: 4px;
+            }
+        """)
+
+        chord_layout.addWidget(self.chord_left_label, 1)
+        chord_layout.addWidget(self.chord_right_label, 1)
+        root.addWidget(chord_panel)
 
         # Клавиатура — сохраняем исходную отрисовку и подписи клавиш.
         self.keyboard = KeyboardView()
@@ -626,7 +754,8 @@ class PianoWindow(QMainWindow):
         except Exception:
             pass
         self.keyboard.set_active_notes(set(), set(), set())
-        self.chord_label.clear()
+        self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
+        self.chord_right_label.setText("ПРАВАЯ РУКА: —")
         self.pdf_view.clear_cursor()
         self.events = []
         self._cursor_map = {}
@@ -641,6 +770,8 @@ class PianoWindow(QMainWindow):
         self.btn_midi.setEnabled(False)
         self.staff_view.setVisible(False)
 
+        # Перед новым файлом останавливаем старое воспроизведение.
+        self.on_stop()
         # Во время загрузки Play сообщает пользователю, что распознавание ещё идёт.
         self._loading = True
         self.btn_play.setEnabled(True)
@@ -710,9 +841,17 @@ class PianoWindow(QMainWindow):
             e_homr = None
             e_homr_img = None
             e_conv = None
+            tempo_override = None
 
             if _ext in (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"):
                 self.sig_status.emit("Картинка — распознаю через homr...")
+                try:
+                    tempo_override = recognize_tempo_from_image(path)
+                    if tempo_override is not None:
+                        print(f"[tempo] Image tempo: {tempo_override} BPM", flush=True)
+                except Exception as e_tempo:
+                    print("[tempo] Image tempo recognition skipped:", e_tempo, flush=True)
+
                 try:
                     mxl = run_homr_image(path)
                 except Exception as e_img:
@@ -786,7 +925,7 @@ class PianoWindow(QMainWindow):
 
             # 3. MusicXML -> события
             self.sig_status.emit("Шаг 3/3: разбор MusicXML...")
-            events, bpm, n_parts = musicxml_to_events(mxl)
+            events, bpm, n_parts = musicxml_to_events(mxl, bpm_override=tempo_override)
 
             if gen != self._load_gen:
                 return
@@ -895,6 +1034,9 @@ class PianoWindow(QMainWindow):
                     if ev.time_seconds >= self.position:
                         self._next_event_idx = i
                         break
+            self.staff_view._manual_view = False
+            self.staff_view._dragging_cursor = False
+            self.staff_view.update()
             self.is_playing = True
             self._elapsed.restart()
 
@@ -908,7 +1050,8 @@ class PianoWindow(QMainWindow):
         self.btn_play.setText("▶")
         self.audio.all_off()
         self.keyboard.set_active_notes(set(), set(), set())
-        self.chord_label.clear()
+        self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
+        self.chord_right_label.setText("ПРАВАЯ РУКА: —")
         self.pdf_view.clear_cursor()
         self.staff_view.set_position(0.0, set())
         self._update_time_label()
@@ -947,13 +1090,23 @@ class PianoWindow(QMainWindow):
             return
         self.audio.note_on(midi, 110)
         self.audio.note_off_later(midi, 0.6)
-        # Подсветим на 300 мс
+        # Подсветка живёт ровно столько же, сколько звук (0.6 с).
+        # Снимаем ТОЛЬКО эту ноту, не трогая другие активные.
         cur = set(self.keyboard.active_notes)
         cur.add(midi)
-        self.keyboard.set_active_notes(cur)
-        QTimer.singleShot(300, lambda: self.keyboard.set_active_notes(
-            self.keyboard.active_notes - {midi}
-        ))
+        cur_r = set(self.keyboard.right_notes)
+        cur_l = set(self.keyboard.left_notes)
+        if midi >= 60:
+            cur_r.add(midi)
+        else:
+            cur_l.add(midi)
+        self.keyboard.set_active_notes(cur, cur_r, cur_l)
+        def _release(m=midi):
+            n = set(self.keyboard.active_notes); n.discard(m)
+            r = set(self.keyboard.right_notes); r.discard(m)
+            l = set(self.keyboard.left_notes); l.discard(m)
+            self.keyboard.set_active_notes(n, r, l)
+        QTimer.singleShot(600, _release)
 
     # ---------- Таймер позиции ----------
     def _tick(self):
@@ -972,16 +1125,24 @@ class PianoWindow(QMainWindow):
 
         # Догоняем события — если отстали, играем несколько подряд
         active_notes = set()
+        now = self.position
         while self._next_event_idx < len(self.events):
             ev = self.events[self._next_event_idx]
-            if ev.time_seconds > self.position:
+            if ev.time_seconds > now:
                 break
             velocity = 100 if ev.hand == "R" else 70
             for n in ev.notes:
                 self.audio.note_on(n, velocity)
                 self.audio.note_off_later(n, max(0.15, ev.duration * 1.2))
                 active_notes.add(n)
+                self._flash_notes[n] = now
             self._next_event_idx += 1
+        # Убираем старые вспышки (>0.15 c назад)
+        cutoff = now - 0.15
+        for k in list(self._flash_notes.keys()):
+            if self._flash_notes[k] < cutoff:
+                del self._flash_notes[k]
+        flash = set(self._flash_notes.keys())
 
         # Подсветка активных
         still_active = set()
@@ -998,11 +1159,32 @@ class PianoWindow(QMainWindow):
                     still_active_right.update(ev.notes)
                 else:
                     still_active_left.update(ev.notes)
-        self.keyboard.set_active_notes(still_active, still_active_right, still_active_left)
-        # Для названия аккорда в первую очередь используем правую руку,
-        # чтобы басовая нота левой руки не искажала распознавание.
-        chord = chord_name(still_active_right) or chord_name(still_active)
-        self.chord_label.setText(f"Аккорд: {chord}" if chord else "")
+        self.keyboard.set_active_notes(still_active, still_active_right, still_active_left, flash)
+        # Распознаём аккорды каждой руки независимо.
+        left_chord = chord_name(still_active_left)
+        right_chord = chord_name(still_active_right)
+
+        if left_chord:
+            left_text = f"ЛЕВАЯ РУКА: {left_chord}"
+        elif still_active_left:
+            bass_note = min(still_active_left)
+            left_text = f"ЛЕВАЯ РУКА: {note_name(bass_note)}"
+        else:
+            left_text = "ЛЕВАЯ РУКА: —"
+
+        if right_chord:
+            right_text = f"ПРАВАЯ РУКА: {right_chord}"
+        elif still_active_right:
+            note_list = " ".join(
+                note_name(n, octave=False)
+                for n in sorted(still_active_right)
+            )
+            right_text = f"ПРАВАЯ РУКА: {note_list}"
+        else:
+            right_text = "ПРАВАЯ РУКА: —"
+
+        self.chord_left_label.setText(left_text)
+        self.chord_right_label.setText(right_text)
 
         # MIDI: подсветить ноты, звучащие сейчас.
         try:
@@ -1025,7 +1207,8 @@ class PianoWindow(QMainWindow):
                 self.btn_play.setText("▶")
                 self.audio.all_off()
                 self.keyboard.set_active_notes(set(), set(), set())
-                self.chord_label.clear()
+                self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
+                self.chord_right_label.setText("ПРАВАЯ РУКА: —")
                 self.pdf_view.clear_cursor()
                 self.status.showMessage("Готово")
 
@@ -1144,20 +1327,105 @@ class PianoWindow(QMainWindow):
         self.pdf_view.set_cursor(x, y, page=pg, notes=self.events[idx].notes)
 
     # ---------- Прогресс-бар ----------
-    def _progress_click(self, event):
-        if self.duration <= 0:
-            return
+    def _progress_event_time(self, event):
         x = event.position().x() if hasattr(event, "position") else event.x()
-        frac = max(0.0, min(1.0, x / self.progress.width()))
-        self.position = frac * self.duration
-        # Пересчитать next_event_idx
-        self._next_event_idx = 0
+        width = max(1, self.progress.width())
+        frac = max(0.0, min(1.0, x / width))
+        return frac * self.duration
+
+    def _progress_click(self, event):
+        if self.duration <= 0 or not self.events:
+            return
+        self._progress_dragging = True
+        self._seek_to_time(self._progress_event_time(event))
+
+    def _progress_move(self, event):
+        if (getattr(self, "_progress_dragging", False)
+                and event.buttons() & Qt.MouseButton.LeftButton):
+            self._seek_to_time(self._progress_event_time(event))
+
+    def _progress_release(self, event):
+        if getattr(self, "_progress_dragging", False):
+            self._seek_to_time(self._progress_event_time(event))
+            self._progress_dragging = False
+
+    def _seek_to_time(self, seconds):
+        if self.duration <= 0 or not self.events:
+            return
+
+        self.is_playing = False
+        self.btn_play.setText("\u25b6")
+        self.audio.all_off()
+        self.position = max(0.0, min(self.duration, float(seconds)))
+        self._elapsed.restart()
+
+        self._next_event_idx = len(self.events)
         for i, ev in enumerate(self.events):
             if ev.time_seconds >= self.position:
                 self._next_event_idx = i
                 break
-        self.audio.all_off()
+
+        self._flash_notes.clear()
+        active = set()
+        active_right = set()
+        active_left = set()
+
+        for ev in self.events:
+            if ev.time_seconds > self.position:
+                break
+            if self.position <= ev.time_seconds + max(0.08, ev.duration * 1.2):
+                for n in ev.notes:
+                    active.add(n)
+                    if getattr(ev, "hand", "R") == "R":
+                        active_right.add(n)
+                    else:
+                        active_left.add(n)
+
+        self.keyboard.set_active_notes(active, active_right, active_left, set())
+
+        left_chord = chord_name(active_left)
+        right_chord = chord_name(active_right)
+
+        if left_chord:
+            left_text = f"\u041b\u0415\u0412\u0410\u042f \u0420\u0423\u041a\u0410: {left_chord}"
+        elif active_left:
+            left_text = f"\u041b\u0415\u0412\u0410\u042f \u0420\u0423\u041a\u0410: \u0411\u0430\u0441 {note_name(min(active_left))}"
+        else:
+            left_text = "\u041b\u0415\u0412\u0410\u042f \u0420\u0423\u041a\u0410: \u2014"
+
+        if right_chord:
+            right_text = f"\u041f\u0420\u0410\u0412\u0410\u042f \u0420\u0423\u041a\u0410: {right_chord}"
+        elif active_right:
+            right_text = "\u041f\u0420\u0410\u0412\u0410\u042f \u0420\u0423\u041a\u0410: " + " ".join(
+                note_name(n, octave=False) for n in sorted(active_right)
+            )
+        else:
+            right_text = "\u041f\u0420\u0410\u0412\u0410\u042f \u0420\u0423\u041a\u0410: \u2014"
+
+        self.chord_left_label.setText(left_text)
+        self.chord_right_label.setText(right_text)
+
+        try:
+            self.staff_view.set_position(
+                self.position, active, active_right, active_left
+            )
+        except Exception:
+            pass
+
+        if self._last_pdf_path.lower().endswith(".pdf") and self._cursor_map:
+            idx = min(
+                range(len(self.events)),
+                key=lambda i: abs(self.events[i].time_seconds - self.position)
+            )
+            self._set_cursor_for_bar(getattr(self.events[idx], "bar", 0))
+
+        try:
+            self.pianoroll_view.set_position(self.position)
+        except Exception:
+            pass
+
         self._update_time_label()
+        self.status.showMessage("\u041f\u0430\u0443\u0437\u0430 \u2014 \u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0432\u044b\u0431\u0440\u0430\u043d\u0430")
 
     def _update_time_label(self):
         def fmt(s):
@@ -1232,6 +1500,58 @@ class PianoWindow(QMainWindow):
             if gen != self._load_gen:
                 return
             self.sig_load_done.emit(None, MANUAL_BPM, f"Ошибка MIDI: {e}")
+    def _show_about(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("О программе NowPiano")
+        dialog.setMinimumWidth(380)
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel("NowPiano")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 22px; font-weight: 700;")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "Распознавание нот из PDF и изображений,\n"
+            "просмотр партитуры и воспроизведение музыки."
+        )
+        description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        qr_path = os.path.abspath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            os.pardir, "resources", "donate_qr.png"
+        ))
+        if os.path.isfile(qr_path):
+            pixmap = QPixmap(qr_path)
+            if not pixmap.isNull():
+                qr = QLabel()
+                qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                qr.setPixmap(pixmap.scaled(
+                    220, 220,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                ))
+                layout.addWidget(qr)
+            else:
+                layout.addWidget(QLabel("Не удалось загрузить QR-код."))
+        else:
+            layout.addWidget(QLabel("QR-код не найден: resources/donate_qr.png"))
+
+        link = QLabel(
+            '<a href="https://github.com/BlaSla/NowPiano">'
+            'GitHub: BlaSla/NowPiano</a>'
+        )
+        link.setOpenExternalLinks(True)
+        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(link)
+
+        close_button = QPushButton("Закрыть")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec()
+
     def closeEvent(self, event):
         self.is_playing = False
         try:

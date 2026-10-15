@@ -54,10 +54,11 @@ class KeyboardView(QWidget):
         self.active_notes = set()
         self.right_notes = set()
         self.left_notes = set()
+        self.flash_notes = set()
         self._white_x = {}
         self._white_w = 0.0
 
-    def set_active_notes(self, notes, right_notes=None, left_notes=None):
+    def set_active_notes(self, notes, right_notes=None, left_notes=None, flash_notes=None):
         notes = set(notes or [])
         # При передаче раздельных наборов цвет показывает руку:
         # правая (скрипичный ключ) — синий, левая (басовый ключ) — зелёный.
@@ -65,10 +66,12 @@ class KeyboardView(QWidget):
             right_notes, left_notes = notes, set()
         right_notes = set(right_notes or [])
         left_notes = set(left_notes or [])
-        changed = (notes != self.active_notes or right_notes != self.right_notes or left_notes != self.left_notes)
+        flash_notes = set()  # ?????? ??????? ?????? ?????????
+        changed = (notes != self.active_notes or right_notes != self.right_notes or left_notes != self.left_notes or flash_notes != self.flash_notes)
         self.active_notes = notes
         self.right_notes = right_notes
         self.left_notes = left_notes
+        self.flash_notes = flash_notes
         if changed:
             self.update()
 
@@ -109,9 +112,16 @@ class KeyboardView(QWidget):
             if is_black_key(n): continue
             x = self._white_x[n]; rect = QRectF(x, pad_top, kw - 1, kh); active = n in self.active_notes
             active_color = self._active_color(n)
+            flashing = n in self.flash_notes
             grad = QLinearGradient(x, pad_top, x, pad_top + kh)
-            grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(252,252,255)); grad.setColorAt(1, active_color if active_color else QColor(225,228,235))
-            p.setBrush(QBrush(grad)); p.setPen(QPen(QColor(60,60,70), 1)); p.drawRoundedRect(rect, 3, 3)
+            if flashing:
+                base = active_color or QColor(255,235,120)
+                grad.setColorAt(0, QColor(255,255,255)); grad.setColorAt(1, base.lighter(115))
+            else:
+                grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(252,252,255)); grad.setColorAt(1, active_color if active_color else QColor(225,228,235))
+            p.setBrush(QBrush(grad))
+            p.setPen(QPen(QColor(255,200,0), 3) if flashing else QPen(QColor(60,60,70), 1))
+            p.drawRoundedRect(rect, 3, 3)
             letter = note_letter(n)
             if active or letter == "C":
                 label = f"{letter}{n//12-1}"
@@ -133,8 +143,16 @@ class KeyboardView(QWidget):
             if not is_black_key(n): continue
             x = self._black_x(n, kw); rect = QRectF(x, pad_top, black_w, black_h); active = n in self.active_notes
             active_color = self._active_color(n)
-            grad = QLinearGradient(x, pad_top, x, pad_top + black_h); grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(60,62,72)); grad.setColorAt(1, active_color if active_color else QColor(10,10,15))
-            p.setBrush(QBrush(grad)); p.setPen(QPen(QColor(0,0,0),1)); p.drawRoundedRect(rect,2,2)
+            flashing = n in self.flash_notes
+            grad = QLinearGradient(x, pad_top, x, pad_top + black_h)
+            if flashing:
+                base = active_color or QColor(255,220,100)
+                grad.setColorAt(0, base.lighter(160)); grad.setColorAt(1, base.lighter(120))
+            else:
+                grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(60,62,72)); grad.setColorAt(1, active_color if active_color else QColor(10,10,15))
+            p.setBrush(QBrush(grad))
+            p.setPen(QPen(QColor(255,200,0), 2) if flashing else QPen(QColor(0,0,0),1))
+            p.drawRoundedRect(rect,2,2)
             p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(255,255,255,40)); p.drawRoundedRect(QRectF(x+2,pad_top+2,black_w-4,4),1,1)
             if active:
                 label = f"{note_letter(n)}{n//12-1}"
