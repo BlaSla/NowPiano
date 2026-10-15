@@ -49,6 +49,6 @@ pyinstaller installer\NowPiano.spec --noconfirm --clean
 MIT License — см. LICENSE.txt
 
 ## Автор
-Вячеслав Блажков Viacheslav Blazhkov
+Вячеслав Блажков (Viacheslav Blazhkov)
 GitHub: https://github.com/BlaSla
 Email: blazhkov1971@gmail.com
