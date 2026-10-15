@@ -15,7 +15,7 @@
 - Всё внутри: SoundFont, Audiveris (+JRE), poppler, FluidSynth, music21
 
 ## Установка
-1. Скачайте NowPiano_Setup.exe (~427 МБ) со страницы Releases.
+1. Скачайте NowPiano_Setup_AllInOne_Final.exe (~850 MB) со страницы Releases.
 2. Запустите установщик (права администратора).
 3. Установите в C:\Program Files\NowPiano\ (по умолчанию).
 4. Запустите из меню Пуск или с ярлыка.
@@ -36,12 +36,12 @@ cd C:\NowPiano
 pyinstaller installer\NowPiano.spec --noconfirm --clean
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" C:\NowPiano\installer\NowPiano.iss
 
-Результат: C:\NowPiano\dist\NowPiano_Setup.exe
+Результат: NowPiano_Setup_AllInOne_Final.exe
 
 ## Лицензия
 MIT License — см. LICENSE.txt
 
 ## Автор
-Вячеслав Блажков
+Вячеслав Блажков Viacheslav Blazhkov
 GitHub: https://github.com/BlaSla
 Email: blazhkov1971@gmail.com
