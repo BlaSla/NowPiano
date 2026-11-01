@@ -4,7 +4,7 @@ import os
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QPixmap
 from PyQt6.QtWidgets import QWidget, QSizePolicy
-from qt_audio import START_NOTE, NUM_KEYS
+from qt_audio import get_keyboard_range
 
 
 def is_black_key(midi: int) -> bool:
@@ -54,11 +54,11 @@ class KeyboardView(QWidget):
         self.active_notes = set()
         self.right_notes = set()
         self.left_notes = set()
-        self.flash_notes = set()
+        self.midi_notes = set()
         self._white_x = {}
         self._white_w = 0.0
 
-    def set_active_notes(self, notes, right_notes=None, left_notes=None, flash_notes=None):
+    def set_active_notes(self, notes, right_notes=None, left_notes=None):
         notes = set(notes or [])
         # При передаче раздельных наборов цвет показывает руку:
         # правая (скрипичный ключ) — синий, левая (басовый ключ) — зелёный.
@@ -66,13 +66,18 @@ class KeyboardView(QWidget):
             right_notes, left_notes = notes, set()
         right_notes = set(right_notes or [])
         left_notes = set(left_notes or [])
-        flash_notes = set()  # ?????? ??????? ?????? ?????????
-        changed = (notes != self.active_notes or right_notes != self.right_notes or left_notes != self.left_notes or flash_notes != self.flash_notes)
+        changed = (notes != self.active_notes or right_notes != self.right_notes or left_notes != self.left_notes)
         self.active_notes = notes
         self.right_notes = right_notes
         self.left_notes = left_notes
-        self.flash_notes = flash_notes
         if changed:
+            self.update()
+
+    def set_midi_notes(self, notes):
+        """????????? ????????? ?????????? MIDI-???????."""
+        notes = set(notes or [])
+        if notes != self.midi_notes:
+            self.midi_notes = notes
             self.update()
 
     def _active_color(self, midi):
@@ -86,13 +91,22 @@ class KeyboardView(QWidget):
             return QColor(55, 145, 245)  # правая рука / скрипичный стан
         return None
 
+    def set_keyboard_size(self, preset):
+        """????? ????????? ?????????? (88/76/61)."""
+        from qt_audio import set_keyboard_size as _set
+        _set(preset)
+        self._white_x = {}
+        self._white_w = 0.0
+        self.update()
+
     def _compute_layout(self):
         w = self.width()
-        n_white = sum(1 for n in range(START_NOTE, START_NOTE + NUM_KEYS) if not is_black_key(n))
+        start_note, num_keys = get_keyboard_range()
+        n_white = sum(1 for n in range(start_note, start_note + num_keys) if not is_black_key(n))
         kw = w / max(1, n_white)
         self._white_w, self._white_x = kw, {}
         idx = 0
-        for n in range(START_NOTE, START_NOTE + NUM_KEYS):
+        for n in range(start_note, start_note + num_keys):
             if not is_black_key(n):
                 self._white_x[n] = idx * kw
                 idx += 1
@@ -105,23 +119,25 @@ class KeyboardView(QWidget):
         return 0.0
 
     def paintEvent(self, event):
+        start_note, num_keys = get_keyboard_range()
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height(); pad_top = 6; kh = h - 12; kw = self._compute_layout()
         grad_bg = QLinearGradient(0, 0, 0, h); grad_bg.setColorAt(0, QColor(250,251,253)); grad_bg.setColorAt(1, QColor(228,232,240)); p.fillRect(self.rect(), QBrush(grad_bg))
-        for n in range(START_NOTE, START_NOTE + NUM_KEYS):
+        for n in range(start_note, start_note + num_keys):
             if is_black_key(n): continue
             x = self._white_x[n]; rect = QRectF(x, pad_top, kw - 1, kh); active = n in self.active_notes
             active_color = self._active_color(n)
-            flashing = n in self.flash_notes
             grad = QLinearGradient(x, pad_top, x, pad_top + kh)
-            if flashing:
-                base = active_color or QColor(255,235,120)
-                grad.setColorAt(0, QColor(255,255,255)); grad.setColorAt(1, base.lighter(115))
-            else:
-                grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(252,252,255)); grad.setColorAt(1, active_color if active_color else QColor(225,228,235))
+            grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(252,252,255)); grad.setColorAt(1, active_color if active_color else QColor(225,228,235))
             p.setBrush(QBrush(grad))
-            p.setPen(QPen(QColor(255,200,0), 3) if flashing else QPen(QColor(60,60,70), 1))
+            p.setPen(QPen(QColor(60,60,70), 1))
             p.drawRoundedRect(rect, 3, 3)
+            if n in self.midi_notes:
+                p.save()
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(QColor(255, 145, 0), 3))
+                p.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 3, 3)
+                p.restore()
             letter = note_letter(n)
             if active or letter == "C":
                 label = f"{letter}{n//12-1}"
@@ -139,20 +155,21 @@ class KeyboardView(QWidget):
                     p.setPen(QColor(150,150,160))
                     p.drawText(rect.adjusted(0, kh-22, 0, -4), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, label)
         black_h, black_w = kh * .62, kw * .62
-        for n in range(START_NOTE, START_NOTE + NUM_KEYS):
+        for n in range(start_note, start_note + num_keys):
             if not is_black_key(n): continue
             x = self._black_x(n, kw); rect = QRectF(x, pad_top, black_w, black_h); active = n in self.active_notes
             active_color = self._active_color(n)
-            flashing = n in self.flash_notes
             grad = QLinearGradient(x, pad_top, x, pad_top + black_h)
-            if flashing:
-                base = active_color or QColor(255,220,100)
-                grad.setColorAt(0, base.lighter(160)); grad.setColorAt(1, base.lighter(120))
-            else:
-                grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(60,62,72)); grad.setColorAt(1, active_color if active_color else QColor(10,10,15))
+            grad.setColorAt(0, QColor(active_color).lighter(135) if active_color else QColor(60,62,72)); grad.setColorAt(1, active_color if active_color else QColor(10,10,15))
             p.setBrush(QBrush(grad))
-            p.setPen(QPen(QColor(255,200,0), 2) if flashing else QPen(QColor(0,0,0),1))
+            p.setPen(QPen(QColor(0,0,0),1))
             p.drawRoundedRect(rect,2,2)
+            if n in self.midi_notes:
+                p.save()
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(QColor(255, 145, 0), 3))
+                p.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 2, 2)
+                p.restore()
             p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(255,255,255,40)); p.drawRoundedRect(QRectF(x+2,pad_top+2,black_w-4,4),1,1)
             if active:
                 label = f"{note_letter(n)}{n//12-1}"
@@ -166,13 +183,14 @@ class KeyboardView(QWidget):
         p.end()
 
     def mousePressEvent(self, event):
+        start_note, num_keys = get_keyboard_range()
         pos = event.position(); kw = self._white_w
-        for n in range(START_NOTE, START_NOTE + NUM_KEYS):
+        for n in range(start_note, start_note + num_keys):
             if is_black_key(n):
                 x = self._black_x(n, kw)
                 if x <= pos.x() <= x + kw*.62 and pos.y() <= self.height()*.62:
                     self.note_clicked.emit(n); return
-        for n in range(START_NOTE, START_NOTE + NUM_KEYS):
+        for n in range(start_note, start_note + num_keys):
             if not is_black_key(n):
                 x = self._white_x.get(n,0)
                 if x <= pos.x() <= x+kw:

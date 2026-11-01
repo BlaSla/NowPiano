@@ -23,6 +23,11 @@ import threading
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+try:
+    import mido
+except Exception:
+    mido = None
 # --- Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С DLL-Р Т‘Р С‘РЎР‚Р ВµР С”РЎвЂљР С•РЎР‚Р С‘РЎР‹ FluidSynth (РЎР‚РЎРЏР Т‘Р С•Р С РЎРѓ exe Р С‘Р В»Р С‘ Р Р† Р С—РЎР‚Р С•Р ВµР С”РЎвЂљР Вµ) ---
 _here = os.path.dirname(os.path.abspath(__file__))
 _proj = os.path.abspath(os.path.join(_here, os.pardir))
@@ -212,8 +217,24 @@ def _homr_env():
     return env
 
 HOMR_PY = _find_homr_python()
-HOMR_EXE = HOMR_PY  # backward compat
+HOMR_EXE = _find_homr()  # standalone HOMR executable, when available
 PDFTOPPM_EXE = _find_pdftoppm()
+
+
+def _homr_command(image_path):
+    """Use bundled standalone HOMR in frozen builds; Python in source mode."""
+    if getattr(_sys, "frozen", False):
+        exe_dir = os.path.dirname(_sys.executable)
+        candidates = [
+            os.path.join(exe_dir, "_internal", "tools", "homr_standalone", "homr.exe"),
+            os.path.join(exe_dir, "tools", "homr_standalone", "homr.exe"),
+        ]
+        for executable in candidates:
+            if os.path.isfile(executable):
+                return [executable, image_path]
+    if HOMR_PY:
+        return [HOMR_PY, "-m", "homr.main", image_path]
+    raise RuntimeError("?? ?????? Python ??? HOMR ??? ??????????????? homr.exe.")
 
 
 # Р вЂ™РЎвЂ№РЎвЂ¦Р С•Р Т‘ OMR Р Т‘Р С•Р В»Р В¶Р ВµР Р… Р В±РЎвЂ№РЎвЂљРЎРЉ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р ВµР Р… Р Т‘Р В»РЎРЏ Р В·Р В°Р С—Р С‘РЎРѓР С‘ Р Т‘Р В°Р В¶Р Вµ Р С—РЎР‚Р С‘ РЎС“РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р С”Р Вµ Р Р† Program Files.
@@ -224,8 +245,23 @@ else:
     OMR_OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "out_omr"))
 MANUAL_BPM = 72.0
 
+KEYBOARD_PRESETS = {
+    88: (21, 88),   # A0..C8
+    76: (28, 76),   # E1..G7
+    61: (36, 61),   # C2..C7
+}
+DEFAULT_KEYBOARD_SIZE = 88
 START_NOTE = 21
 NUM_KEYS = 88
+
+def set_keyboard_size(preset):
+    global START_NOTE, NUM_KEYS
+    if preset not in KEYBOARD_PRESETS:
+        preset = DEFAULT_KEYBOARD_SIZE
+    START_NOTE, NUM_KEYS = KEYBOARD_PRESETS[preset]
+
+def get_keyboard_range():
+    return (START_NOTE, NUM_KEYS)
 
 
 @dataclass
@@ -242,70 +278,106 @@ class NoteEvent:
 
 
 class AudioEngine:
-    """Р С›Р В±РЎвЂРЎР‚РЎвЂљР С”Р В° Р Р…Р В°Р Т‘ FluidSynth: play/stop Р Р…Р С•РЎвЂљ, Р С–РЎР‚Р С•Р СР С”Р С•РЎРѓРЎвЂљРЎРЉ."""
-
     def __init__(self):
         self.fs = None
         self.sfid = None
         self.available = False
         self.active_notes = set()
         self._lock = threading.Lock()
+        self.midi_out = None
+        self.midi_out_name = ""
+
+    @staticmethod
+    def get_output_names():
+        if mido is None:
+            return []
+        try:
+            return list(mido.get_output_names())
+        except Exception as e:
+            print("[MIDI OUT] Port list error:", e)
+            return []
+
+    def open_output(self, name):
+        if mido is None or not name:
+            return False
+        self.close_output()
+        try:
+            port = mido.open_output(name)
+            with self._lock:
+                self.midi_out = port
+                self.midi_out_name = name
+            return True
+        except Exception as e:
+            print("[MIDI OUT] Open error:", e)
+            return False
+
+    def close_output(self):
+        with self._lock:
+            port = self.midi_out
+            self.midi_out = None
+            self.midi_out_name = ""
+            if port is not None:
+                try:
+                    for channel in range(16):
+                        port.send(mido.Message("control_change", channel=channel, control=123, value=0))
+                        port.send(mido.Message("control_change", channel=channel, control=120, value=0))
+                    port.close()
+                except Exception as e:
+                    print("[MIDI OUT] Close error:", e)
 
     def init(self) -> bool:
-        if not FLUID_IMPORT_OK:
-            print("[audio] pyfluidsynth Р Р…Р Вµ РЎС“РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р В»Р ВµР Р…")
-            return False
-        if not os.path.exists(SOUNDFONT_PATH):
-            print("[audio] SoundFont Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…:", SOUNDFONT_PATH)
+        if not FLUID_IMPORT_OK or not os.path.exists(SOUNDFONT_PATH):
             return False
         last_error = None
         for driver in FLUID_DRIVERS:
             synth = None
             try:
                 synth = fluidsynth.Synth(gain=FLUID_GAIN)
-                # Р СџР ВµРЎР‚Р ВµР Т‘Р В°РЎвЂР С Р Т‘РЎР‚Р В°Р в„–Р Р†Р ВµРЎР‚ РЎРЏР Р†Р Р…Р С• Р Р† start(): Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р В° Р С—Р С•РЎРѓР В»Р Вµ РЎРѓР С•Р В·Р Т‘Р В°Р Р…Р С‘РЎРЏ
-                # Synth Р Р…Р Вµ Р Р†РЎРѓР ВµР С–Р Т‘Р В° Р С—РЎР‚Р С‘Р СР ВµР Р…РЎРЏР ВµРЎвЂљРЎРѓРЎРЏ Р С•Р Т‘Р С‘Р Р…Р В°Р С”Р С•Р Р†Р С• Р Р† Windows-РЎРѓР В±Р С•РЎР‚Р С”Р В°РЎвЂ¦.
                 synth.start(driver=driver)
                 sfid = synth.sfload(SOUNDFONT_PATH)
                 if sfid is None or int(sfid) < 0:
-                    raise RuntimeError(f"SoundFont Р Р…Р Вµ Р В·Р В°Р С–РЎР‚РЎС“Р В·Р С‘Р В»РЎРѓРЎРЏ: {SOUNDFONT_PATH} (sfid={sfid})")
+                    raise RuntimeError("SoundFont load failed")
                 synth.program_select(0, int(sfid), 0, 0)
                 self.fs = synth
                 self.sfid = int(sfid)
                 self.available = True
-                print(f"[audio] FluidSynth ready: driver={driver}, SoundFont={SOUNDFONT_PATH}", flush=True)
+                print(f"[audio] FluidSynth ready: driver={driver}", flush=True)
                 return True
             except Exception as e:
                 last_error = e
-                print(f"[audio] Р Т‘РЎР‚Р В°Р в„–Р Р†Р ВµРЎР‚ {driver} Р Р…Р Вµ Р В·Р В°Р С—РЎС“РЎРѓРЎвЂљР С‘Р В»РЎРѓРЎРЏ: {e}", flush=True)
+                print(f"[audio] FluidSynth {driver} error: {e}", flush=True)
                 if synth is not None:
                     try:
                         synth.delete()
                     except Exception:
                         pass
         self.available = False
-        print("[audio] FluidSynth failed on all drivers:", repr(last_error), flush=True)
+        print("[audio] FluidSynth unavailable:", repr(last_error), flush=True)
         return False
 
     def note_on(self, midi: int, velocity: int = 100):
-        if not self.available:
-            return
         with self._lock:
             try:
-                self.fs.noteon(0, midi, velocity)
-                self.active_notes.add(midi)
+                if self.midi_out is not None:
+                    self.midi_out.send(mido.Message("note_on", channel=0, note=int(midi), velocity=int(velocity)))
+                elif self.available and self.fs is not None:
+                    self.fs.noteon(0, int(midi), int(velocity))
+                else:
+                    return
+                self.active_notes.add(int(midi))
             except Exception as e:
                 print("[audio] note_on error:", e)
 
     def note_off(self, midi: int):
-        if not self.available:
-            return
         with self._lock:
             try:
-                self.fs.noteoff(0, midi)
-            except Exception:
-                pass
-            self.active_notes.discard(midi)
+                if self.midi_out is not None:
+                    self.midi_out.send(mido.Message("note_off", channel=0, note=int(midi), velocity=0))
+                elif self.available and self.fs is not None:
+                    self.fs.noteoff(0, int(midi))
+            except Exception as e:
+                print("[audio] note_off error:", e)
+            self.active_notes.discard(int(midi))
 
     def note_off_later(self, midi: int, delay: float):
         def _off():
@@ -314,18 +386,24 @@ class AudioEngine:
         threading.Thread(target=_off, daemon=True).start()
 
     def all_off(self):
-        if not self.available:
-            return
         with self._lock:
-            for n in list(self.active_notes):
+            if self.midi_out is not None:
                 try:
-                    self.fs.noteoff(0, n)
-                except Exception:
-                    pass
+                    for channel in range(16):
+                        self.midi_out.send(mido.Message("control_change", channel=channel, control=123, value=0))
+                except Exception as e:
+                    print("[MIDI OUT] All notes off error:", e)
+            if self.available and self.fs is not None:
+                for n in list(self.active_notes):
+                    try:
+                        self.fs.noteoff(0, n)
+                    except Exception:
+                        pass
             self.active_notes.clear()
 
     def shutdown(self):
         self.all_off()
+        self.close_output()
         if self.fs is not None:
             try:
                 self.fs.delete()
@@ -427,41 +505,11 @@ def run_homr(pdf_path):
     tmpdir = tempfile.mkdtemp(prefix="homr_")
     png_base = os.path.join(tmpdir, "page")
 
-    print("[homr] Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР С‘РЎР‚РЎС“РЎР‹ PDF Р Р† PNG: " + pdf_path, flush=True)
-    try:
-        subprocess.run(
-            [PDFTOPPM_EXE, "-png", "-r", "300", "-f", "1", "-l", "1",
-             pdf_path, png_base],
-            check=True, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=180
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("pdftoppm Р Р…Р Вµ Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р С‘Р В» Р С”Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР В°РЎвЂ Р С‘РЎР‹ Р В·Р В° 3 Р СР С‘Р Р…РЎС“РЎвЂљРЎвЂ№.") from exc
-    except subprocess.CalledProcessError as exc:
-        details = (exc.stderr or exc.stdout or "").strip()[-2000:]
-        raise RuntimeError("pdftoppm РЎС“Р С—Р В°Р В»: " + details) from exc
-    except OSError as exc:
-        raise RuntimeError("Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р В·Р В°Р С—РЎС“РЎРѓРЎвЂљР С‘РЎвЂљРЎРЉ pdftoppm: " + str(exc)) from exc
-
-    png_path = None
-    for f in sorted(os.listdir(tmpdir)):
-        if f.lower().endswith(".png"):
-            png_path = os.path.join(tmpdir, f)
-            break
-    if not png_path:
-        raise RuntimeError("pdftoppm Р Р…Р Вµ РЎРѓР С•Р В·Р Т‘Р В°Р В» PNG.")
-
-    env = _homr_env()
-    here = os.path.dirname(os.path.abspath(__file__))
-    proj = os.path.abspath(os.path.join(here, os.pardir))
-    venv_scripts = os.path.join(proj, "venv", "Scripts")
-    if os.path.isdir(venv_scripts):
-        env["PATH"] = venv_scripts + os.pathsep + env.get("PATH", "")
-
-    print("[homr] Р В·Р В°Р С—РЎС“РЎРѓР С”Р В°РЎР‹: " + HOMR_EXE + " " + png_path, flush=True)
+    command = _homr_command(png_path)
+    print("[homr] ??????: " + subprocess.list2cmdline(command), flush=True)
     try:
         result = subprocess.run(
-            [HOMR_PY, "-m", "homr.main", png_path],
+            command,
             check=False, text=True,
             encoding="utf-8", errors="replace", timeout=900, env=env,
         )
@@ -475,7 +523,7 @@ def run_homr(pdf_path):
         details = details[-3000:]
         raise RuntimeError(
             "homr Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р С‘Р В»РЎРѓРЎРЏ РЎРѓ Р С”Р С•Р Т‘Р С•Р С " + str(result.returncode) + ".\n"
-            "Р С™Р С•Р СР В°Р Р…Р Т‘Р В°: " + subprocess.list2cmdline([HOMR_PY, "-m", "homr.main", png_path]) + "\n"
+            "Р С™Р С•Р СР В°Р Р…Р Т‘Р В°: " + subprocess.list2cmdline(command) + "\n"
             "Р вЂ™РЎвЂ№Р Р†Р С•Р Т‘ homr:\n" + details
         )
 
@@ -586,8 +634,9 @@ def run_homr_image(image_path):
             print(f"[homr-img] Р С—Р С•Р С—РЎвЂ№РЎвЂљР С”Р В°: {label}: {candidate}", flush=True)
             before_files = set(os.listdir(tmpdir))
             try:
+                command = _homr_command(candidate)
                 result = subprocess.run(
-                    [HOMR_PY, "-m", "homr.main", candidate], check=False, capture_output=True,
+                    command, check=False, capture_output=True,
                     text=True, encoding="utf-8", errors="replace", timeout=240,
                     env=env,
                 )
@@ -629,102 +678,73 @@ def run_homr_image(image_path):
 # ---------- MusicXML -> РЎРѓР С•Р В±РЎвЂ№РЎвЂљР С‘РЎРЏ ----------
 def recognize_tempo_from_image(image_path: str):
     """Recognize an explicit tempo marking in a score image."""
-    import json
     import re
-    import subprocess
 
     try:
-        app_dir = (
-            os.path.dirname(os.path.abspath(sys.executable))
-            if getattr(sys, "frozen", False)
-            else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        from PIL import Image, ImageEnhance, ImageFilter
+        from rapidocr import RapidOCR
+
+        with Image.open(image_path) as raw:
+            rgba = raw.convert("RGBA")
+            white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            im = Image.alpha_composite(white, rgba).convert("RGB")
+
+        w, h = im.size
+        variants = [im]
+        variants.append(
+            im.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
         )
 
-        candidates = [
-            os.path.join(app_dir, "tools", "python", "python.exe"),
-            os.path.join(app_dir, "dist", "NowPiano", "tools", "python", "python.exe"),
-        ]
-
-        python_path = next((p for p in candidates if os.path.isfile(p)), None)
-        if not python_path:
-            return None
-
-        bundle_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(python_path))
+        top = im.crop((0, 0, w, max(1, int(h * 0.35))))
+        top = top.resize(
+            (top.width * 4, top.height * 4),
+            Image.Resampling.LANCZOS
         )
-        site_packages = os.path.join(
-            bundle_root, "tools", "python", "Lib", "site-packages"
-        )
-        internal_dir = os.path.join(bundle_root, "_internal")
+        top = ImageEnhance.Contrast(top).enhance(2.0)
+        top = top.filter(ImageFilter.SHARPEN)
+        variants.append(top)
 
-        env = os.environ.copy()
-        extra_paths = [site_packages, internal_dir]
-        existing = env.get("PYTHONPATH", "")
-        if existing:
-            extra_paths.append(existing)
-        env["PYTHONPATH"] = os.pathsep.join(extra_paths)
-
-        ocr_script = (
-            "import json,sys; from rapidocr import RapidOCR; "
-            "r=RapidOCR()(sys.argv[1]); "
-            "print('NOWPIANO_OCR_JSON:'+json.dumps("
-            "{'txts':list(r.txts or []),"
-            "'scores':[float(x) for x in (r.scores or [])]}))"
-        )
-
-        result = subprocess.run(
-            [python_path, "-c", ocr_script, os.path.abspath(image_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-
-        marker = "NOWPIANO_OCR_JSON:"
-        payload = next(
-            (line.split(marker, 1)[1]
-             for line in reversed(result.stdout.splitlines())
-             if marker in line),
-            None,
-        )
-        if result.returncode != 0 or payload is None:
-            print("[tempo-ocr] OCR unavailable; using MusicXML/default tempo.")
-            return None
-
-        data = json.loads(payload)
-        texts = data.get("txts", [])
-        scores = data.get("scores", [])
+        ocr = RapidOCR()
         matches = []
 
-        # Require a tempo-like marker, such as OCR's "J=134".
+        # Tempo symbols can be read as J, j, ? or v by OCR.
         pattern = re.compile(
-            r"(?:[jil|!]|[♩♪])\s*(?:=|:)?\s*(\d{2,3})",
+            r"(?:[jil|!?vV])\s*(?:=|:)?\s*(\d{2,3})",
             re.IGNORECASE,
         )
 
-        for index, text in enumerate(texts):
-            confidence = float(scores[index]) if index < len(scores) else 0.0
-            if confidence < 0.60:
-                continue
+        for img in variants:
+            result = ocr(img)
+            for index, detected_text in enumerate(result.txts or []):
+                confidence = (
+                    float(result.scores[index])
+                    if index < len(result.scores or [])
+                    else 0.0
+                )
+                if confidence < 0.60:
+                    continue
 
-            match = pattern.search(str(text))
-            if not match:
-                continue
-
-            bpm = int(match.group(1))
-            if 20 < bpm < 400:
-                matches.append((confidence, bpm, str(text)))
+                match = pattern.search(str(detected_text))
+                if match:
+                    bpm = int(match.group(1))
+                    if 20 < bpm < 400:
+                        matches.append(
+                            (confidence, bpm, str(detected_text))
+                        )
 
         if not matches:
+            print(
+                "[tempo-ocr] No explicit tempo marking found.",
+                flush=True,
+            )
             return None
 
-        confidence, bpm, text = max(matches, key=lambda item: item[0])
+        confidence, bpm, detected_text = max(
+            matches, key=lambda item: item[0]
+        )
         print(
             f"[tempo-ocr] Recognized tempo: {bpm} BPM "
-            f"(text={text!r}, confidence={confidence:.2f})",
+            f"(text={detected_text!r}, confidence={confidence:.2f})",
             flush=True,
         )
         return float(bpm)
@@ -905,7 +925,7 @@ def total_duration(events: List[NoteEvent]) -> float:
 
 # ---------- Р СћР ВµРЎРѓРЎвЂљ Р СР С•Р Т‘РЎС“Р В»РЎРЏ ----------
 # ---------- Р В­Р С”РЎРѓР С—Р С•РЎР‚РЎвЂљ Р Р† MIDI ----------
-def export_midi(mxl_path: str, out_path: str) -> bool:
+def export_midi(mxl_path: str, out_path: str, bpm=None) -> bool:
     """Р С™Р С•Р Р…Р Р†Р ВµРЎР‚РЎвЂљР С‘РЎР‚РЎС“Р ВµРЎвЂљ MusicXML/MXL Р Р† MIDI РЎвЂЎР ВµРЎР‚Р ВµР В· music21.
     Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ True Р С—РЎР‚Р С‘ РЎС“РЎРѓР С—Р ВµРЎвЂ¦Р Вµ."""
     if not MUSIC21_OK:
@@ -913,6 +933,14 @@ def export_midi(mxl_path: str, out_path: str) -> bool:
         return False
     try:
         score = converter.parse(mxl_path)
+        if bpm is not None:
+            try:
+                bpm_value = float(bpm)
+                if 20.0 < bpm_value < 400.0:
+                    from music21 import tempo as m21tempo
+                    score.insert(0, m21tempo.MetronomeMark(number=bpm_value))
+            except (TypeError, ValueError):
+                pass
         score.write("midi", fp=out_path)
         print(f"[midi] exported: {out_path}")
         return True
@@ -923,8 +951,8 @@ def export_midi(mxl_path: str, out_path: str) -> bool:
 
 def _clamp_octave(midi: int) -> int:
     """Р РЋР Т‘Р Р†Р С‘Р С–Р В°Р ВµРЎвЂљ Р Р…Р С•РЎвЂљРЎС“ Р С•Р С”РЎвЂљР В°Р Р†Р В°Р СР С‘, Р С—Р С•Р С”Р В° Р С•Р Р…Р В° Р Р…Р Вµ Р С—Р С•Р С—Р В°Р Т‘РЎвЂРЎвЂљ Р Р† Р Т‘Р С‘Р В°Р С—Р В°Р В·Р С•Р Р… Р С”Р В»Р В°Р Р†Р С‘Р В°РЎвЂљРЎС“РЎР‚РЎвЂ№."""
-    lo = START_NOTE
-    hi = START_NOTE + NUM_KEYS - 1
+    lo, count = get_keyboard_range()
+    hi = lo + count - 1
     while midi < lo:
         midi += 12
     while midi > hi:
@@ -1078,5 +1106,144 @@ def render_score_to_pngs(source_path: str, out_dir: str = None, max_pages: int =
     return pages
 
 
+def _kar_tempo_map(mid):
+    """Возвращает tempo-события и длительность в секундах для MIDI/KAR."""
+    messages = list(mido.merge_tracks(mid.tracks))
+    tick = 0
+    tempos = [(0, 500000)]
+    lyrics_raw = []
+    note_on = {}
+    note_pairs = []
 
+    for msg in messages:
+        tick += int(getattr(msg, "time", 0) or 0)
+
+        if msg.type == "set_tempo":
+            tempos.append((tick, int(msg.tempo)))
+
+        elif msg.type in ("lyrics", "text"):
+            value = getattr(msg, "text", "")
+            if value:
+                lyrics_raw.append((tick, str(value)))
+
+        elif msg.type == "note_on" and int(msg.velocity) > 0:
+            key = (int(msg.channel), int(msg.note))
+            note_on.setdefault(key, []).append((tick, int(msg.velocity)))
+
+        elif msg.type == "note_off" or (
+            msg.type == "note_on" and int(getattr(msg, "velocity", 0)) == 0
+        ):
+            key = (int(msg.channel), int(msg.note))
+            pending = note_on.get(key)
+            if pending:
+                start_tick, velocity = pending.pop(0)
+                note_pairs.append((start_tick, tick, key[0], key[1], velocity))
+
+    tempos.sort(key=lambda x: x[0])
+    compact = []
+    for item in tempos:
+        if compact and compact[-1][0] == item[0]:
+            compact[-1] = item
+        else:
+            compact.append(item)
+
+    def tick_to_seconds(target):
+        total = 0.0
+        prev_tick = 0
+        tempo = 500000
+        for change_tick, new_tempo in compact:
+            if change_tick >= target:
+                break
+            if change_tick > prev_tick:
+                total += (change_tick - prev_tick) * tempo / (mid.ticks_per_beat * 1000000.0)
+            prev_tick = change_tick
+            tempo = new_tempo
+        if target > prev_tick:
+            total += (target - prev_tick) * tempo / (mid.ticks_per_beat * 1000000.0)
+        return total
+
+    return lyrics_raw, note_pairs, tick_to_seconds, compact
+
+
+def load_kar_lyrics(path):
+    """Извлекает текст KAR и корректно декодирует UTF-8/Windows-1251."""
+    if mido is None:
+        raise RuntimeError("Для чтения KAR необходим пакет mido")
+
+    mid = mido.MidiFile(str(path))
+    raw, _, to_seconds, _ = _kar_tempo_map(mid)
+
+    lyrics = []
+
+    for tick, value in raw:
+        if not value:
+            continue
+
+        # Mido по умолчанию может представить исходные байты как Latin-1.
+        # Возвращаем исходные байты и определяем реальную кодировку.
+        try:
+            data = value.encode("latin1")
+            try:
+                decoded = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                decoded = data.decode("cp1251")
+        except (UnicodeEncodeError, AttributeError):
+            decoded = str(value)
+
+        decoded = decoded.replace("\x00", "")
+        decoded = decoded.replace("\r", " ").replace("\n", " ")
+
+        # Служебные события и пустые фрагменты пропускаем,
+        # но пробелы в конце фрагмента и маркер начала строки сохраняем.
+        if not decoded.strip() or decoded.lstrip().startswith("@"):
+            continue
+        if not decoded.strip("/\\ \t"):
+            continue
+
+        lyrics.append((to_seconds(tick), decoded))
+
+    lyrics.sort(key=lambda item: item[0])
+    return lyrics
+
+
+def load_kar_note_events(path):
+    """Резервное извлечение нот из MIDI/KAR через mido."""
+    if mido is None:
+        raise RuntimeError("Для резервного чтения KAR необходим пакет mido")
+
+    mid = mido.MidiFile(str(path))
+    _, pairs, to_seconds, tempos = _kar_tempo_map(mid)
+
+    grouped = {}
+    for start_tick, end_tick, channel, note, velocity in pairs:
+        if not (START_NOTE <= note <= START_NOTE + NUM_KEYS - 1):
+            continue
+        key = (start_tick, channel)
+        grouped.setdefault(key, []).append((note, max(0, end_tick - start_tick)))
+
+    events = []
+    for (start_tick, channel), items in grouped.items():
+        notes = sorted(set(item[0] for item in items))
+        duration_ticks = max((item[1] for item in items), default=1)
+        start_seconds = to_seconds(start_tick)
+        end_seconds = to_seconds(start_tick + max(1, duration_ticks))
+        hand = "L" if channel == 1 else "R"
+
+        events.append(NoteEvent(
+            bar=1,
+            offset_q=0.0,
+            time_seconds=start_seconds,
+            notes=notes,
+            duration=max(0.05, end_seconds - start_seconds),
+            hand=hand,
+            part=channel
+        ))
+
+    events.sort(key=lambda event: event.time_seconds)
+    if not events:
+        raise RuntimeError("В KAR не найдены MIDI-ноты в диапазоне клавиатуры")
+
+    first_tempo = tempos[0][1] if tempos else 500000
+    bpm = 60000000.0 / first_tempo
+    return events, bpm
 
