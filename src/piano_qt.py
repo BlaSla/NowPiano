@@ -41,6 +41,52 @@ def resource_path(rel: str) -> str:
     return os.path.join(bases[0] or os.path.dirname(__file__), rel)
 
 
+def _find_musescore_executable():
+    """Find bundled MuseScore first, then configured/system installations."""
+    from pathlib import Path
+
+    candidates = []
+
+    if getattr(sys, "frozen", False):
+        app_dir = Path(sys.executable).resolve().parent
+        candidates.append(
+            app_dir / "MuseScore 4" / "bin" / "MuseScore4.exe"
+        )
+    else:
+        project_dir = Path(__file__).resolve().parent.parent
+        candidates.append(
+            project_dir / "MuseScore 4" / "bin" / "MuseScore4.exe"
+        )
+
+    try:
+        from music21 import environment
+        configured = environment.UserSettings()["musicxmlPath"]
+        if configured:
+            candidates.append(Path(str(configured)).expanduser())
+    except Exception:
+        pass
+
+    candidates.append(
+        Path(r"C:\Program Files\MuseScore 4\bin\MuseScore4.exe")
+    )
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+            key = str(candidate).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate.is_file():
+                return candidate
+        except Exception:
+            continue
+
+    return None
+
+
+
 # --- PyInstaller windowed mode fix: sys.stdout/stderr = None ---
 if getattr(sys, "frozen", False):
     if sys.stdout is None:
@@ -514,7 +560,7 @@ class PianoWindow(QMainWindow):
 
         # лоский стиль для кнопок управления в тулбаре
         self.setStyleSheet(self.styleSheet() + """
-        QPushButton#btn_rewind, QPushButton#btn_play,
+        QPushButton#btn_rewind, QPushButton#btn_play, QPushButton#btn_record,
         QPushButton#btn_stop, QPushButton#btn_loop {
             background: transparent;
             border: none;
@@ -523,11 +569,11 @@ class PianoWindow(QMainWindow):
             border-radius: 6px;
             font-size: 18px;
         }
-        QPushButton#btn_rewind:hover, QPushButton#btn_play:hover,
+        QPushButton#btn_rewind:hover, QPushButton#btn_play:hover, QPushButton#btn_record:hover,
         QPushButton#btn_stop:hover, QPushButton#btn_loop:hover {
             background: rgba(40, 120, 208, 60);
         }
-        QPushButton#btn_rewind:pressed, QPushButton#btn_play:pressed,
+        QPushButton#btn_rewind:pressed, QPushButton#btn_play:pressed, QPushButton#btn_record:pressed,
         QPushButton#btn_stop:pressed, QPushButton#btn_loop:pressed {
             background: rgba(40, 120, 208, 120);
         }
@@ -563,7 +609,7 @@ class PianoWindow(QMainWindow):
 
         # Топбар
 
-        # ??????? ???? ??????????
+        # Создание главного меню
         menubar = self.menuBar()
 
         menu_file = menubar.addMenu("\u0424\u0430\u0439\u043b")
@@ -577,6 +623,10 @@ class PianoWindow(QMainWindow):
         self.btn_midi.triggered.connect(self.on_export_midi)
         self.btn_midi.setEnabled(False)
         menu_score.addAction(self.btn_midi)
+        self.act_open_score_pdf = QAction("\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF...", self)
+        self.act_open_score_pdf.triggered.connect(self._export_open_score_pdf)
+        self.act_open_score_pdf.setEnabled(False)
+        menu_score.addAction(self.act_open_score_pdf)
         self.act_record_pdf_export = QAction("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0443 PDF...", self)
         self.act_record_pdf_export.triggered.connect(self._record_export_pdf)
         self.act_record_pdf_export.setEnabled(False)
@@ -640,7 +690,7 @@ class PianoWindow(QMainWindow):
         self.btn_about.triggered.connect(self._show_about)
         menu_help.addAction(self.btn_about)
 
-        # ?????????? ?????? ?????????? ????????????????
+        # Панель управления воспроизведением
         tb = QToolBar("\u041f\u0440\u043e\u0438\u0433\u0440\u044b\u0432\u0430\u0442\u0435\u043b\u044c", self)
         tb.setObjectName("player_toolbar")
         tb.setMovable(False)
@@ -664,8 +714,15 @@ class PianoWindow(QMainWindow):
         self.btn_stop = QPushButton("\u25a0")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.setToolTip("\u0421\u0442\u043e\u043f")
-        self.btn_stop.clicked.connect(self.on_stop)
+        self.btn_stop.clicked.connect(self._toolbar_stop)
         tb.addWidget(self.btn_stop)
+
+        self.btn_record = QPushButton("REC")
+        self.btn_record.setObjectName("btn_record")
+        self.btn_record.setToolTip("Начать запись")
+        self.btn_record.clicked.connect(self._record_toggle)
+        tb.addWidget(self.btn_record)
+        self._update_record_button()
 
         self.btn_loop = QPushButton("\u21bb")
         self.btn_loop.setObjectName("btn_loop")
@@ -691,14 +748,14 @@ class PianoWindow(QMainWindow):
         self.lbl_time.setObjectName("time")
         tb.addWidget(self.lbl_time)
 
-        # ??????? ??????????? ???????? ??????????? ??? ?????????????
-        # ? ????????????? ????????????? ????????, ????? ? ??????????.
+        # Регулятор темпа: изменение скорости воспроизведения
+        # и синхронизация значений между ползунком и счётчиком.
         self.slider_bpm = QSlider(Qt.Orientation.Horizontal, self)
         self.slider_bpm.setRange(30, 200)
         self.slider_bpm.setValue(int(MANUAL_BPM))
         self.slider_bpm.valueChanged.connect(self.on_bpm)
         self.slider_bpm.setFixedWidth(125)
-        self.slider_bpm.setToolTip("???? ???????????????")
+        self.slider_bpm.setToolTip("Темп воспроизведения")
         tb.addWidget(QLabel("BPM"))
         tb.addWidget(self.slider_bpm)
 
@@ -707,7 +764,7 @@ class PianoWindow(QMainWindow):
         self.lbl_bpm.setValue(int(MANUAL_BPM))
         self.lbl_bpm.valueChanged.connect(self.on_bpm)
         self.lbl_bpm.setFixedWidth(65)
-        self.lbl_bpm.setToolTip("?????? ???? (BPM)")
+        self.lbl_bpm.setToolTip("Темп песни (BPM)")
         tb.addWidget(self.lbl_bpm)
 
         self.combo_keys = QComboBox(self)
@@ -796,6 +853,8 @@ class PianoWindow(QMainWindow):
         # Клавиатура — сохраняем исходную отрисовку и подписи клавиш.
         self.keyboard = KeyboardView()
         self.keyboard.note_clicked.connect(self.on_note_clicked)
+        self.keyboard.note_pressed.connect(self._on_screen_note_pressed)
+        self.keyboard.note_released.connect(self._on_screen_note_released)
         root.addWidget(self.keyboard, stretch=0)
 
         # Статус + отдельный индикатор распознавания PDF/MIDI
@@ -851,8 +910,11 @@ class PianoWindow(QMainWindow):
         self._cursor_map = {}
         self._pdf_pages = []
         self.pdf_view.set_page(None)
+        self.pdf_view.set_placeholder("Идёт загрузка и распознавание файла.\nПожалуйста, подождите...")
         self._last_mxl = ""
         self._last_pdf_path = ""
+        if hasattr(self, "act_open_score_pdf"):
+            self.act_open_score_pdf.setEnabled(False)
         self.duration = 0.0
         self.position = 0.0
         self._next_event_idx = 0
@@ -1046,6 +1108,7 @@ class PianoWindow(QMainWindow):
         self._loading = False
         self.btn_open.setEnabled(True)
         if error or events is None:
+            self.pdf_view.set_placeholder("Не удалось обработать файл.\nВыберите другой файл.")
             self.status.showMessage(f"Ошибка: {error}")
             if hasattr(self, "recognition_label"):
                 self.recognition_label.setText("Распознавание: ошибка")
@@ -1077,12 +1140,18 @@ class PianoWindow(QMainWindow):
         self.pianoroll_view.setVisible(False)
         self.staff_view.setVisible(True)
         self.welcome_view.setVisible(False)
+        self.pdf_view.set_placeholder("Файл не загружен.\nНажми «Открыть файл».")
         self.pdf_view.setVisible(False)
         self.staff_view.set_events(events, self.duration)
         self.pianoroll_view.set_events(events, self.duration, bpm)
         if self._pdf_pages:
             self._cursor_map = self._build_cursor_map(self._pdf_pages[0], events)
         self.btn_midi.setEnabled(bool(self._last_mxl) and self._last_mxl.lower().endswith((".mxl", ".musicxml", ".xml")))
+        self.act_open_score_pdf.setEnabled(
+            bool(self._last_mxl)
+            and self._last_mxl.lower().endswith((".mxl", ".musicxml", ".xml"))
+            and os.path.isfile(self._last_mxl)
+        )
         self._update_time_label()
         if hasattr(self, "recognition_label"):
             if self._last_pdf_path.lower().endswith(".pdf"):
@@ -1162,14 +1231,14 @@ class PianoWindow(QMainWindow):
     def _sync_play_button(self):
         if self.is_playing:
             self.btn_play.setText("\u23f8")
-            self.btn_play.setToolTip("?????")
+            self.btn_play.setToolTip("Пауза")
         else:
             self.btn_play.setText("\u25b6")
-            self.btn_play.setToolTip("?????????????")
+            self.btn_play.setToolTip("Воспроизвести")
 
     def on_play_pause(self):
         if self._training_active:
-            self.status.showMessage("?????????? MIDI-?????????? ??? ???????? ???????????????")
+            self.status.showMessage("Воспроизведение MIDI недоступно во время обучения")
             return
             QMessageBox.information(
                 self,
@@ -1282,7 +1351,18 @@ class PianoWindow(QMainWindow):
             self.lbl_bpm.blockSignals(False)
         self.status.showMessage(f"Темп: {value}")
 
+    def _on_screen_note_pressed(self, midi):
+        if self.midi_recorder.state == "recording":
+            self.midi_recorder.note_on(int(midi), 110, 0)
+
+    def _on_screen_note_released(self, midi):
+        if self.midi_recorder.state == "recording":
+            self.midi_recorder.note_off(int(midi), 0)
+
     def on_note_clicked(self, midi):
+        midi = int(midi)
+        if self._training_active:
+            self._check_training_note(midi)
         if not self.audio_ok and self.audio.midi_out is None:
             return
         self.audio.note_on(midi, 110)
@@ -1693,7 +1773,7 @@ class PianoWindow(QMainWindow):
             previous_text += fragment
 
         if idx < 0:
-            heading = '<span style="color:#91a0b5;">??????? ? ???????? ?????? ?????</span>&nbsp;&nbsp;'
+            heading = '<span style="color:#91a0b5;">Ожидание текста песни</span>&nbsp;&nbsp;'
         else:
             heading = ""
 
@@ -1716,7 +1796,7 @@ class PianoWindow(QMainWindow):
             ))
             self.kar_lyric_label.setTextCursor(cursor)
 
-            # ?????? ???????? ???????? ????? ?? ?????? ??????? ???????.
+            # Прокручиваем строку песни так, чтобы текущий фрагмент оставался видимым.
             cursor_rect = self.kar_lyric_label.cursorRect(cursor)
             viewport_width = self.kar_lyric_label.viewport().width()
             scrollbar = self.kar_lyric_label.horizontalScrollBar()
@@ -1732,7 +1812,7 @@ class PianoWindow(QMainWindow):
         self._kar_last_rendered_idx = idx
 
     def _handle_file_drop_event(self, event, open_file=False):
-        """????? ????????? ?????????????? ?????? ?? ??????????."""
+        """Обрабатывает перетаскивание файлов из проводника."""
         mime = event.mimeData()
         if mime is None or not mime.hasUrls():
             return False
@@ -1776,7 +1856,7 @@ class PianoWindow(QMainWindow):
         super().dropEvent(event)
 
     def eventFilter(self, watched, event):
-        """????????? ?????, ??????????????? ?? ???????? ???????? ????."""
+        """Обрабатывает события перетаскивания файлов."""
         if event.type() in (
             QEvent.Type.DragEnter,
             QEvent.Type.DragMove
@@ -1838,6 +1918,276 @@ class PianoWindow(QMainWindow):
         else:
             self.status.showMessage("Ошибка экспорта MIDI")
             QMessageBox.warning(self, "Ошибка", "Не удалось сохранить MIDI.")
+    def _export_open_score_pdf(self):
+        """Export the currently opened MusicXML score to PDF."""
+        import subprocess
+        from pathlib import Path
+
+        source = Path(self._last_mxl) if self._last_mxl else None
+        if source is None or not source.is_file() or source.suffix.lower() not in (
+            ".mxl", ".musicxml", ".xml"
+        ):
+            QMessageBox.information(
+                self,
+                "\u041d\u0435\u0442 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b",
+                "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0438 \u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u0439\u0442\u0435 PDF \u0438\u043b\u0438 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 MusicXML."
+            )
+            return
+
+        default_name = source.with_suffix(".pdf")
+        if self._last_pdf_path.lower().endswith(".pdf"):
+            original = Path(self._last_pdf_path)
+            default_name = original.with_name(
+                original.stem + "_\u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0430.pdf"
+            )
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF",
+            str(default_name),
+            "PDF (*.pdf)"
+        )
+        if not path:
+            return
+
+        output = Path(path)
+        if output.suffix.lower() != ".pdf":
+            output = output.with_suffix(".pdf")
+
+        exe = _find_musescore_executable()
+        if exe is None:
+            QMessageBox.warning(
+                self,
+                "MuseScore \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d",
+                "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d MuseScore4.exe. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0443 MuseScore 4."
+            )
+            return
+
+        try:
+            self.status.showMessage(
+                "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF..."
+            )
+            import xml.etree.ElementTree as ET
+            import tempfile
+            import zipfile
+
+            export_source = source
+            temp_dir = None
+
+            try:
+                if source.suffix.lower() == ".mxl":
+                    with zipfile.ZipFile(source, "r") as archive:
+                        container = ET.fromstring(
+                            archive.read("META-INF/container.xml")
+                        )
+                        rootfile = next(
+                            (x for x in container.iter()
+                             if x.tag.split("}")[-1] == "rootfile"),
+                            None
+                        )
+                        if rootfile is None:
+                            raise RuntimeError(
+                                "В MXL не найден корневой MusicXML-файл."
+                            )
+                        xml_data = archive.read(rootfile.get("full-path"))
+                    root = ET.fromstring(xml_data)
+                else:
+                    root = ET.parse(source).getroot()
+
+                def local_name(element):
+                    return element.tag.split("}")[-1]
+
+                parts = [
+                    element for element in root
+                    if local_name(element) == "part"
+                ]
+
+                if parts:
+                    measure_lists = [
+                        [x for x in part if local_name(x) == "measure"]
+                        for part in parts
+                    ]
+                    max_measures = max(len(x) for x in measure_lists)
+
+                    if any(len(x) < max_measures for x in measure_lists):
+                        for part, measures in zip(parts, measure_lists):
+                            if len(measures) >= max_measures:
+                                continue
+
+                            divisions = 1
+                            beats = 4
+                            beat_type = 4
+
+                            for measure in measures:
+                                for element in measure:
+                                    if local_name(element) == "attributes":
+                                        for item in element:
+                                            name = local_name(item)
+                                            if name == "divisions" and item.text:
+                                                divisions = int(item.text)
+                                            elif name == "time":
+                                                for time_item in item:
+                                                    time_name = local_name(time_item)
+                                                    if time_name == "beats" and time_item.text:
+                                                        beats = int(time_item.text)
+                                                    elif time_name == "beat-type" and time_item.text:
+                                                        beat_type = int(time_item.text)
+
+                            duration = max(
+                                1, round(divisions * beats * 4 / beat_type)
+                            )
+
+                            for number in range(len(measures) + 1, max_measures + 1):
+                                measure = ET.Element(
+                                    "measure", {"number": str(number)}
+                                )
+                                attributes = ET.SubElement(
+                                    measure, "attributes"
+                                )
+                                ET.SubElement(
+                                    attributes, "divisions"
+                                ).text = str(divisions)
+
+                                note = ET.SubElement(measure, "note")
+                                ET.SubElement(
+                                    note, "rest", {"measure": "yes"}
+                                )
+                                ET.SubElement(
+                                    note, "duration"
+                                ).text = str(duration)
+                                ET.SubElement(note, "voice").text = "1"
+                                ET.SubElement(note, "staff").text = "1"
+
+                                if duration == divisions * 4:
+                                    ET.SubElement(note, "type").text = "whole"
+
+                                part.append(measure)
+
+                # Remove fixed page and staff layout constraints.
+                layout_tags = {"page-layout", "system-layout", "staff-layout"}
+                removed_layout = 0
+
+                for parent in root.iter():
+                    for child in list(parent):
+                        if local_name(child) in layout_tags:
+                            parent.remove(child)
+                            removed_layout += 1
+
+                # Increase the MusicXML engraving scale by 50%.
+                scaling_nodes = [
+                    node for node in root.iter()
+                    if local_name(node) == "scaling"
+                ]
+
+                namespace = (
+                    root.tag.split("}")[0] + "}"
+                    if "}" in root.tag else ""
+                )
+
+                if scaling_nodes:
+                    scaling = scaling_nodes[0]
+                else:
+                    defaults = next(
+                        (node for node in root
+                         if local_name(node) == "defaults"),
+                        None
+                    )
+                    if defaults is None:
+                        defaults = ET.SubElement(
+                            root, namespace + "defaults"
+                        )
+                    scaling = ET.SubElement(
+                        defaults, namespace + "scaling"
+                    )
+
+                mm_node = next(
+                    (node for node in scaling
+                     if local_name(node) == "millimeters"),
+                    None
+                )
+                tenths_node = next(
+                    (node for node in scaling
+                     if local_name(node) == "tenths"),
+                    None
+                )
+
+                if mm_node is None:
+                    mm_node = ET.SubElement(
+                        scaling, namespace + "millimeters"
+                    )
+                if tenths_node is None:
+                    tenths_node = ET.SubElement(
+                        scaling, namespace + "tenths"
+                    )
+
+                old_mm = float(mm_node.text or "7.112")
+                old_tenths = float(tenths_node.text or "40")
+                mm_node.text = f"{old_mm * 1.5:.4f}"
+                tenths_node.text = str(old_tenths)
+
+                # Always export a temporary adjusted MusicXML copy.
+                temp_dir = tempfile.TemporaryDirectory(
+                    prefix="nowpiano_score_export_"
+                )
+                export_source = (
+                    Path(temp_dir.name) / "score_export_temp.musicxml"
+                )
+                ET.ElementTree(root).write(
+                    export_source,
+                    encoding="UTF-8",
+                    xml_declaration=True
+                )
+
+                result = subprocess.run(
+                    [str(exe), "-o", str(output), str(export_source)],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    cwd=str(exe.parent)
+                )
+            finally:
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+
+            if result.returncode != 0:
+                stdout_text = (result.stdout or "").strip()
+                stderr_text = (result.stderr or "").strip()
+                raise RuntimeError(
+                    f"MuseScore exit code: {result.returncode}\n"
+                    f"Executable: {exe}\n"
+                    f"Source: {source}\n"
+                    f"Source exists: {source.is_file()}\n"
+                    f"Source size: {source.stat().st_size if source.is_file() else 0}\n"
+                    f"Output: {output}\n"
+                    f"STDOUT:\n{stdout_text[-2500:] or '[empty]'}\n"
+                    f"STDERR:\n{stderr_text[-2500:] or '[empty]'}"
+                )
+
+            if not output.is_file() or output.stat().st_size < 1000:
+                raise RuntimeError(
+                    "MuseScore \u043d\u0435 \u0441\u043e\u0437\u0434\u0430\u043b \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 PDF-\u0444\u0430\u0439\u043b."
+                )
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "\u041e\u0448\u0438\u0431\u043a\u0430 \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0430 PDF",
+                "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u0443\u044e \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0443:\n" + str(exc)
+            )
+            self.status.showMessage(
+                "\u041e\u0448\u0438\u0431\u043a\u0430 \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0430 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF"
+            )
+            return
+
+        self.status.showMessage(f"PDF \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d: {output}", 8000)
+        QMessageBox.information(
+            self,
+            "\u0413\u043e\u0442\u043e\u0432\u043e",
+            f"\u041e\u0442\u043a\u0440\u044b\u0442\u0430\u044f \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430 \u0432 PDF:\n{output}"
+        )
+
+
     def _load_midi_worker(self, path, gen):
         """Загрузка MIDI/KAR без Audiveris и PDF."""
         if gen != self._load_gen:
@@ -1975,17 +2325,72 @@ class PianoWindow(QMainWindow):
         self.staff_view.update()
 
 
-    def _record_start(self):
-        midi_input = getattr(self, "midi_input", None)
-        if midi_input is None or not midi_input.connected:
-            QMessageBox.information(
-                self,
-                "MIDI ?? ?????????",
-                "??????? ?????????? MIDI-?????????? ? ???? MIDI."
-            )
+    def _update_record_button(self):
+        if not hasattr(self, "btn_record"):
             return
 
+        state = self.midi_recorder.state
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        red = QColor("#d93025")
+
+        if state == "recording":
+            # Recording: one solid red circle, filling the outer diameter.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(red)
+            painter.drawEllipse(QRectF(2.0, 2.0, 16.0, 16.0))
+        else:
+            # Ready or paused: red outer ring and red central dot.
+            pen = QPen(red)
+            pen.setWidthF(2.2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(2.0, 2.0, 16.0, 16.0))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(red)
+            painter.drawEllipse(QRectF(7.0, 7.0, 6.0, 6.0))
+
+        painter.end()
+        self.btn_record.setText("")
+        self.btn_record.setIcon(QIcon(pixmap))
+        self.btn_record.setIconSize(QSize(size, size))
+        self.btn_record.setToolTip(
+            "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c \u2014 \u043d\u0430\u0436\u043c\u0438\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u043f\u0440\u0438\u043e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c"
+            if state == "recording"
+            else (
+                "\u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0430 \u043f\u0430\u0443\u0437\u0435 \u2014 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u0434\u043b\u044f \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044f"
+                if state == "paused"
+                else "\u041d\u0430\u0447\u0430\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c"
+            )
+        )
+
+    def _record_toggle(self):
+        state = self.midi_recorder.state
+        if state == "stopped":
+            self._record_start()
+        elif state in ("recording", "paused"):
+            self._record_pause()
+        self._update_record_button()
+
+    def _toolbar_stop(self):
+        if self.midi_recorder.state != "stopped":
+            self._record_stop()
+        else:
+            self.on_stop()
+
+    def _record_start(self):
+        if self.midi_recorder.state != "stopped":
+            self.status.showMessage("Запись уже активна")
+            self._update_record_button()
+            return
+
+
         self.midi_recorder.start()
+        self._update_record_button()
         self._live_midi_score_active = True
 
         self.staff_view.set_events([], 0.01)
@@ -1997,38 +2402,56 @@ class PianoWindow(QMainWindow):
         self.act_record_export.setEnabled(False)
         self.act_record_pdf_export.setEnabled(False)
         self.status.showMessage(
-            "?????? MIDI ???????? ? ????????? ???? ???????? ?? ?????? ?????"
+            "Запись MIDI началась. Исполняйте ноты на вашей клавиатуре."
         )
         self._refresh_live_score()
 
     def _record_pause(self):
         if self.midi_recorder.state == "recording":
             self.midi_recorder.pause()
-            self.status.showMessage("?????? MIDI ??????????????")
+            self.status.showMessage("Запись MIDI приостановлена")
         elif self.midi_recorder.state == "paused":
             self.midi_recorder.resume()
-            self.status.showMessage("?????? MIDI ????????????")
+            self.status.showMessage("Запись MIDI продолжается")
         else:
-            self.status.showMessage("??????? ?????? MIDI")
-
+            self.status.showMessage("Запись MIDI не активна")
+        self._update_record_button()
 
     def _record_stop(self):
         if self.midi_recorder.state == "stopped":
-            self.status.showMessage("?????? MIDI ?? ???????????")
+            self.status.showMessage("Запись MIDI не выполняется")
             return
 
         notes = self.midi_recorder.stop()
         self._refresh_live_score()
         self._live_midi_score_active = False
         self.staff_view._live_recording = False
+
+        # Передаём завершённую MIDI-запись в механизм воспроизведения.
+        if notes:
+            self.events = list(self.staff_view.events)
+            self.duration = max(0.01, float(self.staff_view.duration))
+            self.original_bpm = max(1.0, float(self.current_bpm))
+            self.position = 0.0
+            self._next_event_idx = 0
+            self._cursor_map = {}
+            self.pianoroll_view.set_events(
+                self.events,
+                self.duration,
+                self.current_bpm
+            )
+            self.staff_view._manual_view = False
+            self.staff_view._dragging_cursor = False
+            self.staff_view.set_position(0.0, set(), set(), set())
+            self._update_time_label()
         self.staff_view.update()
 
         self.act_record_export.setEnabled(bool(notes))
         self.act_record_pdf_export.setEnabled(bool(notes))
         self.status.showMessage(
-            f"???????? ???: {len(notes)}"
+            f"Записано нот: {len(notes)}"
         )
-
+        self._update_record_button()
 
     def _record_export_pdf(self):
         if self.midi_recorder.state != "stopped":
@@ -2065,7 +2488,7 @@ class PianoWindow(QMainWindow):
 
             bpm = float(self.current_bpm)
             if not 20.0 <= bpm <= 400.0:
-                raise ValueError("BPM ?????? ???? ?? 20 ?? 400.")
+                raise ValueError("BPM должно быть от 20 до 400.")
 
             score = stream.Score()
             score.insert(0, tempo.MetronomeMark(number=bpm))
@@ -2100,20 +2523,9 @@ class PianoWindow(QMainWindow):
 
                 score.append(part)
 
-            exe_candidates = [
-                Path(r"C:\Program Files\MuseScore 4\bin\MuseScore4.exe")
-            ]
-            try:
-                from music21 import environment
-                configured = environment.UserSettings()["musicxmlPath"]
-                if configured:
-                    exe_candidates.insert(0, Path(configured))
-            except Exception:
-                pass
-
-            exe = next((p for p in exe_candidates if p.is_file()), None)
+            exe = _find_musescore_executable()
             if exe is None:
-                raise FileNotFoundError("?? ?????? MuseScore4.exe.")
+                raise FileNotFoundError("Не найден MuseScore4.exe.")
 
             output_path = Path(path)
             with tempfile.TemporaryDirectory(prefix="nowpiano_score_") as td:
@@ -2159,17 +2571,18 @@ class PianoWindow(QMainWindow):
                     capture_output=True,
                     text=True,
                     timeout=180,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    cwd=str(exe.parent)
                 )
 
                 if result.returncode != 0:
                     details = (result.stderr or result.stdout or "").strip()
                     raise RuntimeError(
-                        "MuseScore ?????????? ? ???????: " + details[-1800:]
+                        "MuseScore завершился с ошибкой: " + details[-1800:]
                     )
 
             if not output_path.is_file() or output_path.stat().st_size < 1000:
-                raise RuntimeError("MuseScore ?? ?????? ?????????? PDF-????.")
+                raise RuntimeError("MuseScore не смог создать PDF-файл.")
 
         except Exception as exc:
             QMessageBox.warning(
@@ -2191,19 +2604,19 @@ class PianoWindow(QMainWindow):
     def _record_export(self):
         if self.midi_recorder.state != "stopped":
             QMessageBox.information(
-                self, "?????????? MIDI",
-                "??????? ????????? ??????."
+                self, "Запись MIDI",
+                "Сначала завершите запись."
             )
             return
 
         if not self.midi_recorder.snapshot():
             QMessageBox.information(
-                self, "??? ???", "? ?????? ???? ??? ???."
+                self, "Нет нот", "В записи пока нет нот."
             )
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "????????? MIDI-??????",
+            self, "Сохранить MIDI-файл",
             "NowPiano_performance.mid",
             "MIDI (*.mid)"
         )
@@ -2217,15 +2630,15 @@ class PianoWindow(QMainWindow):
                 path, bpm=float(self.current_bpm)
             )
         except Exception as exc:
-            QMessageBox.warning(self, "?????? ??????????", str(exc))
+            QMessageBox.warning(self, "Ошибка сохранения", str(exc))
             return
 
         self.status.showMessage(
-            f"MIDI-?????? ?????????: {path} ({count} ???)"
+            f"MIDI-файл сохранён: {path} ({count} нот)"
         )
         QMessageBox.information(
-            self, "??????",
-            f"????????? ???: {count}\n????: {path}"
+            self, "Готово",
+            f"Сохранено нот: {count}\nФайл: {path}"
         )
 
     def _init_midi_input(self):
@@ -2281,7 +2694,7 @@ class PianoWindow(QMainWindow):
             right_notes = set()
             left_notes = set()
 
-            # ?????????? ??????? ????? ??? ? ??????????? ?????????? ????????.
+            # Группируем ноты одной руки и определяем границы временной группы.
             while group_end < len(events):
                 ev = events[group_end]
                 ev_time = float(ev.time_seconds)
@@ -2423,7 +2836,7 @@ class PianoWindow(QMainWindow):
             self._training_correct += 1
 
             if not self._training_event_remaining:
-                # ????????? ????? ??? ?????? ????????????? ??????? ????? ???.
+                # Переходим к следующему событию после завершения текущей группы нот.
                 self._training_event_idx = self._training_event_end_idx
                 self._prepare_training_event()
             else:

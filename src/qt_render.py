@@ -46,6 +46,8 @@ def chord_name(midis) -> str:
 class KeyboardView(QWidget):
     """Рисует 88 клавиш, подсвечивает активные ноты."""
     note_clicked = pyqtSignal(int)
+    note_pressed = pyqtSignal(int)
+    note_released = pyqtSignal(int)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(240)
@@ -55,6 +57,7 @@ class KeyboardView(QWidget):
         self.right_notes = set()
         self.left_notes = set()
         self.midi_notes = set()
+        self._pressed_note = None
         self._white_x = {}
         self._white_w = 0.0
 
@@ -189,12 +192,20 @@ class KeyboardView(QWidget):
             if is_black_key(n):
                 x = self._black_x(n, kw)
                 if x <= pos.x() <= x + kw*.62 and pos.y() <= self.height()*.62:
-                    self.note_clicked.emit(n); return
+                    self._pressed_note = n; self.note_pressed.emit(n); self.note_clicked.emit(n); return
         for n in range(start_note, start_note + num_keys):
             if not is_black_key(n):
                 x = self._white_x.get(n,0)
                 if x <= pos.x() <= x+kw:
-                    self.note_clicked.emit(n); return
+                    self._pressed_note = n; self.note_pressed.emit(n); self.note_clicked.emit(n); return
+
+
+    def mouseReleaseEvent(self, event):
+        if self._pressed_note is not None:
+            note = self._pressed_note
+            self._pressed_note = None
+            self.note_released.emit(note)
+        super().mouseReleaseEvent(event)
 
 
 class PdfView(QWidget):
@@ -203,8 +214,13 @@ class PdfView(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.setMinimumHeight(420)
         self._pixmap = None; self._cursor_xy = None; self._active_notes = set()
+        self._placeholder = "Файл не загружен.\nНажми «Открыть файл». "
 
     def set_page(self, pixmap): self._pixmap = pixmap; self.update()
+
+    def set_placeholder(self, text):
+        self._placeholder = str(text)
+        self.update()
     def set_cursor(self, x: float, y: float, page=None, notes=None):
         self._cursor_xy = (float(x), float(y)); self._active_notes = set(notes or []); self.update()
     def clear_cursor(self): self._cursor_xy = None; self._active_notes = set(); self.update()
@@ -213,7 +229,7 @@ class PdfView(QWidget):
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w,h = self.width(),self.height(); grad = QLinearGradient(0,0,0,h); grad.setColorAt(0,QColor(245,247,250)); grad.setColorAt(1,QColor(228,232,240)); p.fillRect(self.rect(),QBrush(grad))
         if self._pixmap is None or self._pixmap.isNull():
-            p.setPen(QColor(120,126,140)); p.setFont(QFont("Segoe UI",14)); p.drawText(self.rect(),Qt.AlignmentFlag.AlignCenter,"PDF не загружен.\nНажми «Открыть PDF»."); p.end(); return
+            p.setPen(QColor(120,126,140)); p.setFont(QFont("Segoe UI",14)); p.drawText(self.rect(),Qt.AlignmentFlag.AlignCenter,self._placeholder); p.end(); return
         pm=self._pixmap; pw,ph=pm.width(),pm.height(); scale=min(max(1,w-60)/pw,max(1,h-40)/ph); sw,sh=int(pw*scale),int(ph*scale); x0=(w-sw)//2; y0=(h-sh)//2
         p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(0,0,0,100)); p.drawRoundedRect(QRectF(x0+6,y0+8,sw,sh),8,8); p.setBrush(QColor(250,250,252)); p.drawRoundedRect(QRectF(x0,y0,sw,sh),6,6); p.drawPixmap(x0,y0,sw,sh,pm); p.setBrush(Qt.BrushStyle.NoBrush); p.setPen(QPen(QColor(180,180,190),1)); p.drawRoundedRect(QRectF(x0,y0,sw,sh),6,6)
         if self._cursor_xy is not None:

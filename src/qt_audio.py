@@ -442,6 +442,23 @@ def run_audiveris(pdf_path: str) -> str:
         "-output", OMR_OUTPUT_DIR, pdf_path
     ]
     env = os.environ.copy()
+    # Use bundled Audiveris OCR language models when available.
+    tessdata_candidates = []
+    if getattr(_sys, 'frozen', False):
+        exe_dir = os.path.dirname(_sys.executable)
+        tessdata_candidates.extend([
+            os.path.join(exe_dir, '_internal', 'tools', 'audiveris', 'tessdata'),
+            os.path.join(exe_dir, 'tools', 'audiveris', 'tessdata'),
+        ])
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
+        proj = os.path.abspath(os.path.join(here, os.pardir))
+        tessdata_candidates.append(os.path.join(proj, 'tools', 'audiveris', 'tessdata'))
+    for tessdata_dir in tessdata_candidates:
+        if (os.path.isfile(os.path.join(tessdata_dir, 'eng.traineddata'))
+                and os.path.isfile(os.path.join(tessdata_dir, 'rus.traineddata'))):
+            env['TESSDATA_PREFIX'] = tessdata_dir
+            break
     java_home = None
     if getattr(_sys, "frozen", False):
         exe_dir = os.path.dirname(_sys.executable)
