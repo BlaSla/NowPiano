@@ -17,6 +17,15 @@ from PyQt6.QtWidgets import (
     QTextBrowser, QTextEdit
 )
 
+# Локализация
+try:
+    from i18n import tr, set_language, load_language, get_language
+except ImportError:
+    def tr(k): return k
+    def set_language(c): pass
+    def load_language(): pass
+    def get_language(): return "ru"
+
 
 def resource_path(rel: str) -> str:
     """Find resources both in source layout and PyInstaller builds."""
@@ -377,10 +386,10 @@ class StaffTimelineView(QWidget):
         _used = staff_h * 2 + _gap_between + 16  # +16 запас снизу/сверху
         top = max(20, int((h - _used) / 2))
         p.setPen(QColor('#26364a')); p.setFont(QFont('Segoe UI', 10, QFont.Weight.DemiBold))
-        p.drawText(12, 22, 'ЦИФРОВАЯ ПАРТИТУРА')
+        p.drawText(12, 22, tr("digital_score"))
         p.setFont(QFont('Segoe UI', 9))
         if not self.events and not self._live_recording:
-            p.setPen(QColor('#788397')); p.drawText(left, 75, 'Загрузите PDF или MIDI-файл')
+            p.setPen(QColor('#788397')); p.drawText(left, 75, tr("central_no_file")); print("[paintEvent] lang=", __import__("i18n").get_language(), "text=", repr(tr("central_no_file")))
             p.end(); return
 
         # Follow playback: keep a short readable time window rather than compressing
@@ -594,10 +603,10 @@ class PianoWindow(QMainWindow):
 
         if not self.audio_ok:
             self.status.showMessage(
-                f"Внимание: звук не инициализирован. Проверь SoundFont: {SOUNDFONT_PATH}"
+                tr("warning_soundfont").format(path=SOUNDFONT_PATH)
             )
         else:
-            self.status.showMessage("Готов. Нажми «Открыть».")
+            self.status.showMessage(tr("status_ready"))
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -612,86 +621,97 @@ class PianoWindow(QMainWindow):
         # Создание главного меню
         menubar = self.menuBar()
 
-        menu_file = menubar.addMenu("\u0424\u0430\u0439\u043b")
-        self.btn_open = QAction("\u041e\u0442\u043a\u0440\u044b\u0442\u044c...", self)
+        menu_file = menubar.addMenu(tr("file"))
+        self.btn_open = QAction(tr("menu_open"), self)
         self.btn_open.setShortcut(QKeySequence.StandardKey.Open)
         self.btn_open.triggered.connect(self.on_open)
         menu_file.addAction(self.btn_open)
 
-        menu_score = menubar.addMenu("\u041f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0430")
-        self.btn_midi = QAction("\u042d\u043a\u0441\u043f\u043e\u0440\u0442 MIDI", self)
+        menu_score = menubar.addMenu(tr("score"))
+        self.btn_midi = QAction(tr("menu_export_midi"), self)
         self.btn_midi.triggered.connect(self.on_export_midi)
         self.btn_midi.setEnabled(False)
         menu_score.addAction(self.btn_midi)
-        self.act_open_score_pdf = QAction("\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF...", self)
+        self.act_open_score_pdf = QAction(tr("export_score_pdf"), self)
         self.act_open_score_pdf.triggered.connect(self._export_open_score_pdf)
         self.act_open_score_pdf.setEnabled(False)
         menu_score.addAction(self.act_open_score_pdf)
-        self.act_record_pdf_export = QAction("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0443 PDF...", self)
+        self.act_record_pdf_export = QAction(tr("menu_export_pdf"), self)
         self.act_record_pdf_export.triggered.connect(self._record_export_pdf)
         self.act_record_pdf_export.setEnabled(False)
         menu_score.addAction(self.act_record_pdf_export)
 
-        menu_view = menubar.addMenu("\u0412\u0438\u0434")
-        act_staff = QAction("\u0426\u0438\u0444\u0440\u043e\u0432\u0430\u044f \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u0430", self)
+        menu_view = menubar.addMenu(tr("view"))
+        act_staff = QAction(tr("digital_score_view"), self)
         act_staff.triggered.connect(lambda: self._set_display_view("staff"))
         menu_view.addAction(act_staff)
         act_roll = QAction("Piano Roll", self)
         act_roll.triggered.connect(lambda: self._set_display_view("roll"))
         menu_view.addAction(act_roll)
-        act_pdf = QAction("PDF / \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435", self)
+        act_pdf = QAction(tr("pdf_image_view"), self)
         act_pdf.triggered.connect(lambda: self._set_display_view("pdf"))
         menu_view.addAction(act_pdf)
 
-        menu_midi = menubar.addMenu("MIDI")
-        self.btn_midi_input = QAction("MIDI IN: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435...", self)
+        menu_midi = menubar.addMenu(tr("midi"))
+        self.btn_midi_input = QAction(tr("midi_in_connecting"), self)
         self.btn_midi_input.triggered.connect(self._show_midi_dialog)
         menu_midi.addAction(self.btn_midi_input)
-        self.btn_midi_output = QAction("MIDI OUT: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435...", self)
+        self.btn_midi_output = QAction(tr("midi_out_connecting"), self)
         self.btn_midi_output.triggered.connect(self._show_midi_out_dialog)
         menu_midi.addAction(self.btn_midi_output)
 
         menu_midi.addSeparator()
-        self.act_record_start = QAction("\u041d\u0430\u0447\u0430\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c \u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f", self)
+        self.act_record_start = QAction(tr("midi_start_recording"), self)
         self.act_record_start.triggered.connect(self._record_start)
         menu_midi.addAction(self.act_record_start)
 
-        self.act_record_pause = QAction("\u041f\u0430\u0443\u0437\u0430 / \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c", self)
+        self.act_record_pause = QAction(tr("midi_pause_resume"), self)
         self.act_record_pause.triggered.connect(self._record_pause)
         menu_midi.addAction(self.act_record_pause)
 
-        self.act_record_stop = QAction("\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c", self)
+        self.act_record_stop = QAction(tr("midi_stop_recording"), self)
         self.act_record_stop.triggered.connect(self._record_stop)
         menu_midi.addAction(self.act_record_stop)
 
-        self.act_record_export = QAction("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c MIDI-\u0437\u0430\u043f\u0438\u0441\u044c...", self)
+        self.act_record_export = QAction(tr("midi_save_recording"), self)
         self.act_record_export.triggered.connect(self._record_export)
         self.act_record_export.setEnabled(False)
         menu_midi.addAction(self.act_record_export)
 
-        menu_training = menubar.addMenu("\u0422\u0440\u0435\u043d\u0438\u0440\u043e\u0432\u043a\u0430")
-        self.btn_training = QAction("MIDI-\u0442\u0440\u0435\u043d\u0438\u0440\u043e\u0432\u043a\u0430", self)
+        menu_training = menubar.addMenu(tr("training"))
+        self.btn_training = QAction(tr("midi_training"), self)
         self.btn_training.setCheckable(True)
         self.btn_training.toggled.connect(self._toggle_midi_training)
         menu_training.addAction(self.btn_training)
 
         self._training_waiting_for_correct = False
 
-        menu_settings = menubar.addMenu("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
-        act_bpm = QAction("\u0422\u0435\u043c\u043f (BPM)...", self)
+        menu_settings = menubar.addMenu(tr("settings"))
+        act_bpm = QAction(tr("bpm"), self)
         act_bpm.triggered.connect(self._choose_bpm)
         menu_settings.addAction(act_bpm)
-        act_keys = QAction("\u0420\u0430\u0437\u043c\u0435\u0440 \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u044b...", self)
+        act_keys = QAction(tr("keyboard_size"), self)
         act_keys.triggered.connect(self._choose_keyboard_size)
         menu_settings.addAction(act_keys)
 
-        menu_help = menubar.addMenu("\u0421\u043f\u0440\u0430\u0432\u043a\u0430")
-        self.btn_about = QAction("\u041e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435 NowPiano", self)
+        # Подменю выбора языка
+        menu_lang = menu_settings.addMenu(tr("language"))
+        self._lang_actions = {}
+        for code in ("ru", "en", "zh"):
+            a = QAction(tr(f"lang_{code}"), self)
+            a.setCheckable(True)
+            a.setChecked(code == get_language())
+            a.triggered.connect(lambda checked, c=code: self._switch_language(c))
+            menu_lang.addAction(a)
+            self._lang_actions[code] = a
+
+        menu_help = menubar.addMenu(tr("help"))
+        self.btn_about = QAction(tr("about"), self)
         self.btn_about.triggered.connect(self._show_about)
         menu_help.addAction(self.btn_about)
 
         # Панель управления воспроизведением
-        tb = QToolBar("\u041f\u0440\u043e\u0438\u0433\u0440\u044b\u0432\u0430\u0442\u0435\u043b\u044c", self)
+        tb = QToolBar(tr("player"), self)
         tb.setObjectName("player_toolbar")
         tb.setMovable(False)
         tb.setFloatable(False)
@@ -719,7 +739,7 @@ class PianoWindow(QMainWindow):
 
         self.btn_record = QPushButton("REC")
         self.btn_record.setObjectName("btn_record")
-        self.btn_record.setToolTip("Начать запись")
+        self.btn_record.setToolTip(tr("tooltip_record"))
         self.btn_record.clicked.connect(self._record_toggle)
         tb.addWidget(self.btn_record)
         self._update_record_button()
@@ -755,7 +775,7 @@ class PianoWindow(QMainWindow):
         self.slider_bpm.setValue(int(MANUAL_BPM))
         self.slider_bpm.valueChanged.connect(self.on_bpm)
         self.slider_bpm.setFixedWidth(125)
-        self.slider_bpm.setToolTip("Темп воспроизведения")
+        self.slider_bpm.setToolTip(tr("tooltip_bpm"))
         tb.addWidget(QLabel("BPM"))
         tb.addWidget(self.slider_bpm)
 
@@ -764,7 +784,7 @@ class PianoWindow(QMainWindow):
         self.lbl_bpm.setValue(int(MANUAL_BPM))
         self.lbl_bpm.valueChanged.connect(self.on_bpm)
         self.lbl_bpm.setFixedWidth(65)
-        self.lbl_bpm.setToolTip("Темп песни (BPM)")
+        self.lbl_bpm.setToolTip(tr("tooltip_bpm_song"))
         tb.addWidget(self.lbl_bpm)
 
         self.combo_keys = QComboBox(self)
@@ -805,7 +825,7 @@ class PianoWindow(QMainWindow):
         chord_layout.setContentsMargins(8, 4, 8, 4)
         chord_layout.setSpacing(8)
 
-        self.chord_left_label = QLabel("ЛЕВАЯ РУКА: —")
+        self.chord_left_label = QLabel(tr("left_hand"))
         self.chord_left_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.chord_left_label.setMinimumHeight(38)
         self.chord_left_label.setStyleSheet("""
@@ -817,7 +837,7 @@ class PianoWindow(QMainWindow):
             }
         """)
 
-        self.chord_right_label = QLabel("ПРАВАЯ РУКА: —")
+        self.chord_right_label = QLabel(tr("right_hand"))
         self.chord_right_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.chord_right_label.setMinimumHeight(38)
         self.chord_right_label.setStyleSheet("""
@@ -860,7 +880,7 @@ class PianoWindow(QMainWindow):
         # Статус + отдельный индикатор распознавания PDF/MIDI
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.recognition_label = QLabel("Распознавание: —")
+        self.recognition_label = QLabel(tr("recognition"))
         self.recognition_label.setMinimumWidth(170)
         self.recognition_progress = QProgressBar()
         self.recognition_progress.setRange(0, 100)
@@ -903,14 +923,14 @@ class PianoWindow(QMainWindow):
         except Exception:
             pass
         self.keyboard.set_active_notes(set(), set(), set())
-        self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
-        self.chord_right_label.setText("ПРАВАЯ РУКА: —")
+        self.chord_left_label.setText(tr("left_hand"))
+        self.chord_right_label.setText(tr("right_hand"))
         self.pdf_view.clear_cursor()
         self.events = []
         self._cursor_map = {}
         self._pdf_pages = []
         self.pdf_view.set_page(None)
-        self.pdf_view.set_placeholder("Идёт загрузка и распознавание файла.\nПожалуйста, подождите...")
+        self.pdf_view.set_placeholder(tr("loading"))
         self._last_mxl = ""
         self._last_pdf_path = ""
         if hasattr(self, "act_open_score_pdf"):
@@ -936,9 +956,9 @@ class PianoWindow(QMainWindow):
         self._load_gen = getattr(self, "_load_gen", 0) + 1
         gen = self._load_gen
 
-        self.status.showMessage(f"Загрузка: {os.path.basename(path)}")
+        self.status.showMessage(tr("status_loading").format(name=os.path.basename(path)))
         if lower.endswith((".mid", ".midi", ".kar")):
-            self.recognition_label.setText("KAR: загрузка караоке" if lower.endswith(".kar") else "MIDI: загрузка")
+            self.recognition_label.setText(tr("status_kar") if lower.endswith(".kar") else tr("status_midi"))
             self.recognition_progress.setRange(0, 100)
             self.recognition_progress.setValue(0)
             threading.Thread(
@@ -947,7 +967,7 @@ class PianoWindow(QMainWindow):
                 daemon=True
             ).start()
         else:
-            self.recognition_label.setText("Распознавание PDF")
+            self.recognition_label.setText(tr("recognition_pdf"))
             self.recognition_progress.setRange(0, 100)
             self.recognition_progress.setValue(0)
             threading.Thread(
@@ -961,7 +981,7 @@ class PianoWindow(QMainWindow):
             return
         try:
             # 1. Рендер первой страницы PDF через Poppler (pdf2image)
-            self.sig_status.emit("Шаг 1/3: рендер PDF...")
+            self.sig_status.emit(tr("status_pdf_render"))
             pix = None
             try:
                 from pdf2image import convert_from_path
@@ -1005,7 +1025,7 @@ class PianoWindow(QMainWindow):
             tempo_override = None
 
             if _ext in (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"):
-                self.sig_status.emit("Картинка — распознаю через homr...")
+                self.sig_status.emit(tr("status_image_homr"))
                 try:
                     tempo_override = recognize_tempo_from_image(path)
                     if tempo_override is not None:
@@ -1020,7 +1040,7 @@ class PianoWindow(QMainWindow):
                     print("[homr-img] ошибка:", e_img, flush=True)
 
                 if (not mxl) or (not os.path.exists(mxl)):
-                    self.sig_status.emit("homr не справился — конвертирую в PDF и пробую Audiveris...")
+                    self.sig_status.emit(tr("status_homr_fail"))
                     pdf_tmp = None
                     try:
                         pdf_tmp = _image_to_pdf(path)
@@ -1046,7 +1066,7 @@ class PianoWindow(QMainWindow):
                                 pass
 
                 if (not mxl) or (not os.path.exists(mxl)):
-                    msg = ("Не удалось распознать картинку.\n"
+                    msg = (tr("error_image") + "\n"
                            "homr(img): " + str(e_homr_img) + "\n"
                            "conv: " + str(e_conv) + "\n"
                            "Audiveris: " + str(e_aud) + "\n"
@@ -1057,7 +1077,7 @@ class PianoWindow(QMainWindow):
                     self.sig_load_done.emit(None, MANUAL_BPM, msg)
                     return
             else:
-                self.sig_status.emit("Шаг 2/3: Audiveris распознаёт (может занять минуту)...")
+                self.sig_status.emit(tr("status_audiveris"))
                 try:
                     mxl = run_audiveris(path)
                 except Exception as e:
@@ -1065,7 +1085,7 @@ class PianoWindow(QMainWindow):
                     print("[audiveris] ошибка:", e, flush=True)
 
                 if (not mxl) or (not os.path.exists(mxl)):
-                    self.sig_status.emit("Audiveris не справился — пробую homr...")
+                    self.sig_status.emit(tr("status_audiveris_fail"))
                     try:
                         mxl = run_homr(path)
                     except Exception as e_h:
@@ -1073,7 +1093,7 @@ class PianoWindow(QMainWindow):
                         print("[homr] ошибка:", e_h, flush=True)
 
                 if (not mxl) or (not os.path.exists(mxl)):
-                    msg = ("Ни Audiveris, ни homr не смогли распознать ноты.\n"
+                    msg = (tr("error_notes") + "\n"
                            "Audiveris: " + str(e_aud) + "\n"
                            "homr: " + str(e_homr))
                     print("[omr]", msg, flush=True)
@@ -1085,7 +1105,7 @@ class PianoWindow(QMainWindow):
             self._last_pdf_path = path
 
             # 3. MusicXML -> события
-            self.sig_status.emit("Шаг 3/3: разбор MusicXML...")
+            self.sig_status.emit(tr("status_musicxml"))
             events, bpm, n_parts = musicxml_to_events(mxl, bpm_override=tempo_override)
 
             if gen != self._load_gen:
@@ -1108,10 +1128,10 @@ class PianoWindow(QMainWindow):
         self._loading = False
         self.btn_open.setEnabled(True)
         if error or events is None:
-            self.pdf_view.set_placeholder("Не удалось обработать файл.\nВыберите другой файл.")
+            self.pdf_view.set_placeholder(tr("error_processing"))
             self.status.showMessage(f"Ошибка: {error}")
             if hasattr(self, "recognition_label"):
-                self.recognition_label.setText("Распознавание: ошибка")
+                self.recognition_label.setText(tr("recognition_error"))
                 self.recognition_progress.setRange(0, 100)
                 self.recognition_progress.setValue(0)
             QMessageBox.warning(self, "Ошибка загрузки", str(error))
@@ -1140,7 +1160,7 @@ class PianoWindow(QMainWindow):
         self.pianoroll_view.setVisible(False)
         self.staff_view.setVisible(True)
         self.welcome_view.setVisible(False)
-        self.pdf_view.set_placeholder("Файл не загружен.\nНажми «Открыть файл».")
+        self.pdf_view.set_placeholder(tr("no_file"))
         self.pdf_view.setVisible(False)
         self.staff_view.set_events(events, self.duration)
         self.pianoroll_view.set_events(events, self.duration, bpm)
@@ -1155,9 +1175,9 @@ class PianoWindow(QMainWindow):
         self._update_time_label()
         if hasattr(self, "recognition_label"):
             if self._last_pdf_path.lower().endswith(".pdf"):
-                self.recognition_label.setText(f"Ноты распознаны: {len(events)} событий")
+                self.recognition_label.setText(tr("recognized_events").format(n=len(events)))
             else:
-                self.recognition_label.setText(f"MIDI: {len(events)} событий")
+                self.recognition_label.setText(tr("midi_events").format(n=len(events)))
             self.recognition_progress.setRange(0, 100)
             self.recognition_progress.setValue(100)
         self.status.showMessage(
@@ -1169,14 +1189,14 @@ class PianoWindow(QMainWindow):
         if not hasattr(self, "recognition_progress"):
             return
         if "Шаг 1/3" in text:
-            self.recognition_label.setText("PDF: подготовка")
+            self.recognition_label.setText(tr("pdf_preparing"))
             self.recognition_progress.setRange(0, 100)
             self.recognition_progress.setValue(10)
         elif "Шаг 2/3" in text or "Audiveris распознаёт" in text:
-            self.recognition_label.setText("Распознавание нот")
+            self.recognition_label.setText(tr("recognition_notes"))
             self.recognition_progress.setRange(0, 0)  # Audiveris не сообщает точный процент
         elif "Шаг 3/3" in text:
-            self.recognition_label.setText("Разбор нот")
+            self.recognition_label.setText(tr("parsing_notes"))
             self.recognition_progress.setRange(0, 100)
             self.recognition_progress.setValue(80)
 
@@ -1231,10 +1251,10 @@ class PianoWindow(QMainWindow):
     def _sync_play_button(self):
         if self.is_playing:
             self.btn_play.setText("\u23f8")
-            self.btn_play.setToolTip("Пауза")
+            self.btn_play.setToolTip(tr("tooltip_pause"))
         else:
             self.btn_play.setText("\u25b6")
-            self.btn_play.setToolTip("Воспроизвести")
+            self.btn_play.setToolTip(tr("tooltip_play"))
 
     def on_play_pause(self):
         if self._training_active:
@@ -1242,7 +1262,7 @@ class PianoWindow(QMainWindow):
             return
             QMessageBox.information(
                 self,
-                "Идёт распознавание нот",
+                tr("recognizing"),
                 "Программа ещё распознаёт ноты и подготавливает партитуру.\n\n"
                 "Дождитесь завершения распознавания, после этого нажмите Play ещё раз."
             )
@@ -1254,7 +1274,7 @@ class PianoWindow(QMainWindow):
             self.is_playing = False
             self.btn_play.setText("▶")
             self.audio.all_off()
-            self.status.showMessage("Пауза")
+            self.status.showMessage(tr("tooltip_pause"))
         else:
             # Если стоим в конце — начнём с начала
             if self.position >= self.duration - 0.01:
@@ -1293,8 +1313,8 @@ class PianoWindow(QMainWindow):
         self.btn_play.setText("\u25b6")
         self.audio.all_off()
         self.keyboard.set_active_notes(set(), set(), set())
-        self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
-        self.chord_right_label.setText("ПРАВАЯ РУКА: —")
+        self.chord_left_label.setText(tr("left_hand"))
+        self.chord_right_label.setText(tr("right_hand"))
         self.pdf_view.clear_cursor()
         self.staff_view.set_position(0.0, set())
         self._update_time_label()
@@ -1438,21 +1458,21 @@ class PianoWindow(QMainWindow):
         right_chord = chord_name(still_active_right)
 
         if left_chord:
-            left_text = f"ЛЕВАЯ РУКА: {left_chord}"
+            left_text = f'{tr("left_hand").split(":")[0]}: {left_chord}'
         elif still_active_left:
             bass_note = min(still_active_left)
-            left_text = f"ЛЕВАЯ РУКА: {note_name(bass_note)}"
+            left_text = f'{tr("left_hand").split(":")[0]}: {note_name(bass_note)}'
         else:
             left_text = "ЛЕВАЯ РУКА: —"
 
         if right_chord:
-            right_text = f"ПРАВАЯ РУКА: {right_chord}"
+            right_text = f'{tr("right_hand").split(":")[0]}: {right_chord}'
         elif still_active_right:
             note_list = " ".join(
                 note_name(n, octave=False)
                 for n in sorted(still_active_right)
             )
-            right_text = f"ПРАВАЯ РУКА: {note_list}"
+            right_text = f'{tr("right_hand").split(":")[0]}: {note_list}'
         else:
             right_text = "ПРАВАЯ РУКА: —"
 
@@ -1480,8 +1500,8 @@ class PianoWindow(QMainWindow):
                 self.btn_play.setText("▶")
                 self.audio.all_off()
                 self.keyboard.set_active_notes(set(), set(), set())
-                self.chord_left_label.setText("ЛЕВАЯ РУКА: —")
-                self.chord_right_label.setText("ПРАВАЯ РУКА: —")
+                self.chord_left_label.setText(tr("left_hand"))
+                self.chord_right_label.setText(tr("right_hand"))
                 self.pdf_view.clear_cursor()
                 self.status.showMessage("Готово")
 
@@ -1965,7 +1985,7 @@ class PianoWindow(QMainWindow):
 
         try:
             self.status.showMessage(
-                "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u043e\u0442\u043a\u0440\u044b\u0442\u043e\u0439 \u043f\u0430\u0440\u0442\u0438\u0442\u0443\u0440\u044b \u0432 PDF..."
+                tr("export_score_pdf")
             )
             import xml.etree.ElementTree as ET
             import tempfile
@@ -2222,7 +2242,7 @@ class PianoWindow(QMainWindow):
             self.sig_load_done.emit(None, MANUAL_BPM, f"Ошибка MIDI/KAR: {e}")
     def _show_about(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("О программе NowPiano")
+        dialog.setWindowTitle(tr("about_title"))
         dialog.setMinimumWidth(380)
         layout = QVBoxLayout(dialog)
 
@@ -2264,7 +2284,7 @@ class PianoWindow(QMainWindow):
         link.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(link)
 
-        close_button = QPushButton("Закрыть")
+        close_button = QPushButton(tr("midi_close_btn"))
         close_button.clicked.connect(dialog.accept)
         layout.addWidget(close_button)
         dialog.exec()
@@ -2873,11 +2893,11 @@ class PianoWindow(QMainWindow):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Настройка MIDI-входа")
+        dialog.setWindowTitle(tr("midi_in_title"))
         dialog.setMinimumWidth(380)
         layout = QVBoxLayout(dialog)
 
-        layout.addWidget(QLabel("Выберите MIDI-клавиатуру:"))
+        layout.addWidget(QLabel(tr("midi_select_keyboard")))
 
         combo = QComboBox()
         ports = self.midi_input.available_ports()
@@ -2888,14 +2908,14 @@ class PianoWindow(QMainWindow):
 
         status = QLabel(
             "Подключено: " + self.midi_input.port_name
-            if self.midi_input.connected else "MIDI не подключён"
+            if self.midi_input.connected else tr("midi_not_connected")
         )
         layout.addWidget(status)
 
         buttons = QHBoxLayout()
-        connect_button = QPushButton("Подключить")
-        disconnect_button = QPushButton("Отключить")
-        close_button = QPushButton("Закрыть")
+        connect_button = QPushButton(tr("midi_connect_btn"))
+        disconnect_button = QPushButton(tr("midi_disconnect_btn"))
+        close_button = QPushButton(tr("midi_close_btn"))
 
         buttons.addWidget(connect_button)
         buttons.addWidget(disconnect_button)
@@ -2909,13 +2929,13 @@ class PianoWindow(QMainWindow):
                 QSettings("NowPiano", "NowPiano").setValue(
                     "midi_input/last_port", name
                 )
-                status.setText("Подключено: " + name)
+                status.setText(tr("midi_connected").format(name=name))
             else:
-                status.setText("Не удалось подключить MIDI")
+                status.setText(tr("midi_connect_fail"))
 
         def disconnect():
             self.midi_input.disconnect_port()
-            status.setText("MIDI не подключён")
+            status.setText(tr("midi_not_connected"))
 
         connect_button.clicked.connect(connect_selected)
         disconnect_button.clicked.connect(disconnect)
@@ -2924,7 +2944,7 @@ class PianoWindow(QMainWindow):
 
     def _show_midi_out_dialog(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 MIDI OUT")
+        dialog.setWindowTitle(tr("midi_out_title"))
         dialog.setMinimumWidth(400)
         layout = QVBoxLayout(dialog)
 
@@ -2942,15 +2962,15 @@ class PianoWindow(QMainWindow):
         layout.addWidget(combo)
 
         status = QLabel(
-            "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e: " + self.audio.midi_out_name
-            if self.audio.midi_out is not None else "MIDI OUT \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d"
+            tr("midi_connected").split(":")[0] + ": " + self.audio.midi_out_name
+            if self.audio.midi_out is not None else tr("midi_out_not_connected")
         )
         layout.addWidget(status)
 
         buttons = QHBoxLayout()
-        connect_button = QPushButton("\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c")
-        disconnect_button = QPushButton("\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c")
-        close_button = QPushButton("\u0417\u0430\u043a\u0440\u044b\u0442\u044c")
+        connect_button = QPushButton(tr("midi_connect_btn"))
+        disconnect_button = QPushButton(tr("midi_disconnect_btn"))
+        close_button = QPushButton(tr("midi_close_btn"))
         buttons.addWidget(connect_button)
         buttons.addWidget(disconnect_button)
         buttons.addWidget(close_button)
@@ -2959,11 +2979,11 @@ class PianoWindow(QMainWindow):
         def connect_selected():
             name = combo.currentText()
             if not name:
-                QMessageBox.warning(dialog, "MIDI OUT", "\u041d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d MIDI-\u0432\u044b\u0445\u043e\u0434.")
+                QMessageBox.warning(dialog, "MIDI OUT", tr("midi_out_not_selected"))
                 return
             if self.audio.open_output(name):
                 settings.setValue("midi_output/last_port", name)
-                status.setText("\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e: " + name)
+                status.setText(tr("midi_connected").split(":")[0] + ": " + name)
                 self.btn_midi_output.setText("MIDI OUT: " + name)
                 self.status.showMessage("MIDI OUT \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d: " + name, 5000)
             else:
@@ -2972,8 +2992,8 @@ class PianoWindow(QMainWindow):
 
         def disconnect_output():
             self.audio.close_output()
-            status.setText("MIDI OUT \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d")
-            self.btn_midi_output.setText("MIDI OUT: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435...")
+            status.setText(tr("midi_out_not_connected"))
+            self.btn_midi_output.setText(tr("midi_out_connecting"))
             self.status.showMessage("MIDI OUT \u043e\u0442\u043a\u043b\u044e\u0447\u0451\u043d", 5000)
 
         connect_button.clicked.connect(connect_selected)
@@ -2994,7 +3014,26 @@ class PianoWindow(QMainWindow):
             pass
         super().closeEvent(event)
 
+    def _switch_language(self, code: str):
+        set_language(code)
+        for c, a in getattr(self, "_lang_actions", {}).items():
+            a.setChecked(c == code)
+        
+        # Автоматический перезапуск приложения
+        from PyQt6.QtCore import QProcess, QTimer
+        
+        QMessageBox.information(
+            self, tr("language"), 
+            {"ru": "Приложение будет перезапущено...", 
+             "en": "Restarting app...", 
+             "zh": "正在重启应用..."}.get(code, "")
+        )
+        
+        QProcess.startDetached(sys.executable, sys.argv)
+        QTimer.singleShot(100, QApplication.instance().quit)
+
 def main():
+    load_language()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 

@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QPixmap
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from qt_audio import get_keyboard_range
+from i18n import tr
 
 
 def is_black_key(midi: int) -> bool:
@@ -214,7 +215,7 @@ class PdfView(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.setMinimumHeight(420)
         self._pixmap = None; self._cursor_xy = None; self._active_notes = set()
-        self._placeholder = "Файл не загружен.\nНажми «Открыть файл». "
+        self._placeholder = tr("central_no_file")
 
     def set_page(self, pixmap): self._pixmap = pixmap; self.update()
 
