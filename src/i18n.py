@@ -258,3 +258,23 @@ TRANSLATIONS["zh"]["midi_out_select_device"] = "选择 MIDI 输出设备:"
 TRANSLATIONS["ru"]["midi_out_not_selected"] = "Не выбран MIDI-выход."
 TRANSLATIONS["en"]["midi_out_not_selected"] = "No MIDI output selected."
 TRANSLATIONS["zh"]["midi_out_not_selected"] = "未选择 MIDI 输出。"
+# --- Принудительное обновление ключей MIDI OUT ---
+TRANSLATIONS["ru"]["midi_out_select_device"] = "Выберите MIDI-устройство для вывода:"
+TRANSLATIONS["en"]["midi_out_select_device"] = "Select MIDI output device:"
+TRANSLATIONS["zh"]["midi_out_select_device"] = "选择 MIDI 输出设备:"
+
+TRANSLATIONS["ru"]["midi_out_not_connected"] = "MIDI OUT не подключён"
+TRANSLATIONS["en"]["midi_out_not_connected"] = "MIDI OUT not connected"
+TRANSLATIONS["zh"]["midi_out_not_connected"] = "MIDI OUT 未连接"
+
+TRANSLATIONS["ru"]["midi_connect_btn"] = "Подключить"
+TRANSLATIONS["en"]["midi_connect_btn"] = "Connect"
+TRANSLATIONS["zh"]["midi_connect_btn"] = "连接"
+
+TRANSLATIONS["ru"]["midi_disconnect_btn"] = "Отключить"
+TRANSLATIONS["en"]["midi_disconnect_btn"] = "Disconnect"
+TRANSLATIONS["zh"]["midi_disconnect_btn"] = "断开"
+
+TRANSLATIONS["ru"]["midi_close_btn"] = "Закрыть"
+TRANSLATIONS["en"]["midi_close_btn"] = "Close"
+TRANSLATIONS["zh"]["midi_close_btn"] = "关闭"

@@ -2948,7 +2948,7 @@ class PianoWindow(QMainWindow):
         dialog.setMinimumWidth(400)
         layout = QVBoxLayout(dialog)
 
-        layout.addWidget(QLabel("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 MIDI-\u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u043e \u0434\u043b\u044f \u0432\u044b\u0432\u043e\u0434\u0430:"))
+        layout.addWidget(QLabel(tr("midi_out_select_device")))
         combo = QComboBox()
         ports = self.audio.get_output_names()
         combo.addItems(ports)
