@@ -1,60 +1,49 @@
-# 🎹 NowPiano v2.1
+# 🎹 NowPiano
 
-**Русский** | [English](#english) | [中文](#中文)
-
----
-
-## Русский
-
-**NowPiano** — это настольное приложение для Windows для чтения нот, воспроизведения MIDI/MusicXML и интерактивного обучения игре на фортепиано. Всё необходимое уже включено в единый установщик — никаких дополнительных программ или библиотек устанавливать не нужно.
-
-### ⬇️ Скачать
-* 👉 **[Скачать NowPiano v2.1 для Windows (All-in-One Installer, ~1 ГБ)](https://github.com/BlaSla/NowPiano/releases/download/v2.1/NowPianoV2_v2.1_Setup.exe)**
-* 📦 [Страница всех релизов (GitHub Releases)](https://github.com/BlaSla/NowPiano/releases/tag/v2.1)
-
-### ✨ Основные возможности
-* **Всё в одном (All-in-One):** встроенный звуковой движок **FluidSynth + SoundFont**, автономное распознавание нот с изображений (JPG/PNG) и PDF (**HOMR + Audiveris + Poppler**), а также встроенный **MuseScore Studio** для экспорта партитур в PDF.
-* **Интерактивный режим тренировки:**
-  * Переключение режима игры (**Правая рука**, **Левая рука**, **Обе руки**) прямо на верхней панели инструментов.
-  * Подсветка ожидаемых клавиш на экранной клавиатуре и ожидание точного нажатия с MIDI-клавиатуры или мышью.
-  * Плавное позиционирование по нотам с помощью перетаскивания красной линии курсора на цифровой партитуре.
-* **Просмотр и запись:** цифровая партитура, Piano Roll, отображение аккордов для каждой руки, подключение MIDI IN/OUT, запись игры и экспорт в MIDI или PDF.
-* **Мультиязычный интерфейс:** Русский, English, 中文.
+Desktop piano learning, sheet music recognition (Offline OMR), and interactive MIDI/MusicXML player for Windows.
 
 ---
 
-## English
+## ⬇️ Download / Скачать / 下载 (v3.0 All-in-One)
 
-**NowPiano** is a desktop application for Windows designed for sheet music reading, MIDI/MusicXML playback, and interactive piano practice. Everything is bundled into a single all-in-one installer — no external runtimes, Python, or third-party dependencies required.
-
-### ⬇️ Download
-* 👉 **[Download NowPiano v2.1 for Windows (All-in-One Installer, ~1 GB)](https://github.com/BlaSla/NowPiano/releases/download/v2.1/NowPianoV2_v2.1_Setup.exe)**
-* 📦 [View Release Page (GitHub Releases)](https://github.com/BlaSla/NowPiano/releases/tag/v2.1)
-
-### ✨ Key Features
-* **All-in-One Bundle:** built-in **FluidSynth + SoundFont** synthesizer, offline Optical Music Recognition (OMR) for images and PDFs (**HOMR + Audiveris + Poppler**), and bundled **MuseScore Studio** for PDF score export.
-* **Interactive Training Mode:**
-  * Quick hand-selection toggles (**Right Hand**, **Left Hand**, **Both Hands**) directly on the main toolbar.
-  * Real-time key highlighting and note-by-note waiting via MIDI keyboard or mouse.
-  * Smooth red cursor line dragging across the digital score for precise note positioning.
-* **Score & Recording Tools:** digital staff view, Piano Roll, real-time chord recognition for left and right hands, MIDI IN/OUT support, performance recording, and MIDI/PDF export.
-* **Multi-language UI:** Russian, English, and Chinese.
+* **Direct Download (Windows 10/11 x64, ~1.08 GB):**
+  👉 [**NowPiano_V3_Setup.exe (GitHub Releases)**](https://github.com)
+* **🇨🇳 中国大陆高速镜像下载 (GitHub Proxy):**
+  👉 [**NowPiano_V3_Setup.exe (国内加速直链)**](https://gh-proxy.com/https://github.com)
+* **All Releases / Все версии:** [https://github.com](https://github.com)
 
 ---
 
-## 中文
+## 🇷🇺 Описание (Русский)
 
-**NowPiano** 是一款适用于 Windows 的桌面钢琴学习与乐谱播放软件，支持乐谱识别、MIDI/MusicXML 播放以及交互式钢琴练习。所有组件均已打包进单一安装程序中，无需额外安装任何运行库或第三方软件。
+**NowPiano** — настольная программа для обучения игре на фортепиано, офлайн-распознавания нот с изображений и PDF (OMR) и воспроизведения партитур.
 
-### ⬇️ 下载安装
-* 👉 **[下载 NowPiano v2.1 Windows 完整安装包 (~1 GB)](https://github.com/BlaSla/NowPiano/releases/download/v2.1/NowPianoV2_v2.1_Setup.exe)**
-* 📦 [查看发布页面 (GitHub Releases)](https://github.com/BlaSla/NowPiano/releases/tag/v2.1)
+### Основные возможности:
+* **Всё в одном (All-in-One):** в установщик уже включены синтезатор **FluidSynth + SoundFont**, движки распознавания нот **HOMR + RapidOCR + Audiveris + Java + Poppler** и **MuseScore Studio** для экспорта в PDF. Интернет и установка Python не требуются.
+* **Темы оформления (Настройки → Тема оформления):** **iOS Light**, **Dark Studio** и **Классическая**.
+* **Интерактивная тренировка:** режим ожидания правильной ноты, выбор партии (**Обе руки**, **Правая**, **Левая**) с 3D-подсказками, плавное перетаскивание красного курсора по партитуре и подсветка аккордов.
+* **MIDI и запись:** подключение MIDI-клавиатуры (MIDI IN/OUT), запись игры, просмотр Piano Roll, экспорт в `.mid` и `.pdf`.
 
-### ✨ 核心功能
-* **开箱即用（All-in-One）：** 内置 **FluidSynth + SoundFont** 高品质音源、离线图片（JPG/PNG）与 PDF 乐谱识别引擎（**HOMR + Audiveris + Poppler**），并集成 **MuseScore Studio** 支持一键导出 PDF 乐谱。
-* **交互式练琴模式：**
-  * 顶部工具栏一键切换 **右手**、**左手** 或 **双手** 练习模式。
-  * 屏幕键盘实时高亮提示当前音符，支持外接 MIDI 键盘或鼠标点击练习。
-  * 支持在数字乐谱上平滑拖动红色光标线，精准定位任意音符位置开始练习。
-* **乐谱与录音工具：** 数字五线谱视图、瀑布流（Piano Roll）、左右手和弦实时识别、MIDI IN/OUT 设备连接、演奏录制及 MIDI/PDF 导出。
-* **多语言界面：** 支持俄语、英语和简体中文。
+---
+
+## 🇬🇧 Overview (English)
+
+**NowPiano** is a desktop piano learning application, offline optical music recognition (OMR) tool, and interactive MIDI / MusicXML player for Windows.
+
+### Key Features:
+* **All-in-One Standalone Installer:** bundles **FluidSynth + SoundFont**, offline **HOMR + RapidOCR + Audiveris + Java + Poppler** OMR engines, and **MuseScore Studio** for PDF score export. Works 100% offline.
+* **UI Themes (Settings → Theme):** instant switching between **iOS Light**, **Dark Studio**, and **Classic** themes.
+* **Interactive Practice:** wait-for-note training mode, quick hand selection (**Both**, **Right**, **Left**) with 3D hand indicators, smooth draggable playhead cursor, and real-time chord detection.
+* **MIDI & Export:** external MIDI keyboard support (MIDI IN/OUT), performance recording, Piano Roll view, and `.mid` / `.pdf` export.
+
+---
+
+## 🇨🇳 软件介绍 (简体中文)
+
+**NowPiano** 是一款专为 Windows 设计的桌面钢琴学习、离线图片/PDF 乐谱识别（OMR）与交互式 MIDI/MusicXML 播放软件。
+
+### 核心特性：
+* **开箱即用（All-in-One 完整安装包）：** 内置 **FluidSynth + SoundFont** 高品质钢琴音源、离线识谱引擎（**HOMR + RapidOCR + Audiveris + Java + Poppler**）以及 **MuseScore Studio**（支持一键导出 PDF 乐谱），无需安装 Python 或配置环境。
+* **多套界面主题（设置 → 界面主题）：** 支持 **iOS Light（苹果浅色风格）**、**Dark Studio（专业深色工作室）** 和 **Classic（经典默认）**。
+* **交互式练琴模式：** 支持等待弹奏纠错模式、顶部工具栏一键切换 **右手 / 左手 / 双手** 练习（3D 手势提示）、可拖动红色进度光标以及实时和弦识别。
+* **MIDI 与导出：** 支持外接 MIDI 键盘（MIDI IN/OUT）、演奏录音、瀑布流（Piano Roll）视图以及 `.mid` / `.pdf` 导出。
