@@ -1,2 +1,3 @@
 # 🎹 NowPiano 3.2
+Desktop piano learning suite, offline optical music recognition (OMR), smart accompaniment arranger, and interactive MIDI/MusicXML player for Windows.
 ...
